@@ -22,7 +22,7 @@ function listFeedbackSubjectOptions(req, res) {
   return res.json({ options: FEEDBACK_SUBJECT_OPTIONS });
 }
 
-function submitFeedback(req, res) {
+async function submitFeedback(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -44,7 +44,7 @@ function submitFeedback(req, res) {
   }
   if (!message) return res.status(400).json({ error: 'Message is required' });
 
-  const userRow = db
+  const userRow = await db
     .prepare(`SELECT email FROM users WHERE id = ? LIMIT 1`)
     .get(userId);
   const fromEmail = userRow?.email ? String(userRow.email) : null;
@@ -52,7 +52,7 @@ function submitFeedback(req, res) {
   const id = `fb_${crypto.randomBytes(10).toString('hex')}`;
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO feedback_submissions (
         id,
         user_id,

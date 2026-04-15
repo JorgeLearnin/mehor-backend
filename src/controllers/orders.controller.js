@@ -100,11 +100,11 @@ function computeFullRefundAmounts(row) {
   };
 }
 
-function listMoreTimeRequests(orderId) {
+async function listMoreTimeRequests(orderId) {
   const oid = String(orderId || '').trim();
   if (!oid) return [];
   try {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT id,
                 stage,
@@ -256,7 +256,7 @@ async function cancelOverduePaidOrdersAndRefund({ nowIso, limit = 25 } = {}) {
     ? Math.max(1, Math.min(100, Number(limit)))
     : 25;
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -305,8 +305,8 @@ async function cancelOverduePaidOrdersAndRefund({ nowIso, limit = 25 } = {}) {
       continue;
     }
 
-    const tx = db.transaction(() => {
-      const result = db
+    const tx = db.transaction(async () => {
+      const result = await db
         .prepare(
           `UPDATE orders
               SET status = 'canceled',
@@ -325,17 +325,19 @@ async function cancelOverduePaidOrdersAndRefund({ nowIso, limit = 25 } = {}) {
       if (Number(result?.changes ?? 0) <= 0) return false;
 
       // Make listing purchasable again.
-      db.prepare(
-        `UPDATE listings
+      await db
+        .prepare(
+          `UPDATE listings
             SET status = 'active', updated_at = ?
           WHERE id = ? AND status = 'in_progress'`,
-      ).run(now, String(r.listingId));
+        )
+        .run(now, String(r.listingId));
 
       // Notifications (best-effort; these only create DB rows).
       const title = String(r.listingTitle || 'Listing');
       const orderNumber = r.orderNumber ? String(r.orderNumber) : null;
 
-      createNotification({
+      await createNotification({
         userId: String(r.buyerId),
         type: 'buyer.order_refunded',
         title: 'Order refunded',
@@ -345,7 +347,7 @@ async function cancelOverduePaidOrdersAndRefund({ nowIso, limit = 25 } = {}) {
         data: { orderId, orderNumber },
       });
 
-      createNotification({
+      await createNotification({
         userId: String(r.sellerId),
         type: 'seller.order_canceled',
         title: 'Order canceled',
@@ -359,7 +361,7 @@ async function cancelOverduePaidOrdersAndRefund({ nowIso, limit = 25 } = {}) {
     });
 
     try {
-      const didCancel = tx();
+      const didCancel = await tx();
       if (didCancel) canceledCount += 1;
     } catch (e) {
       console.warn('Auto-cancel transaction failed:', orderId, e);
@@ -375,7 +377,7 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
     ? Math.max(1, Math.min(100, Number(limit)))
     : 25;
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -423,8 +425,8 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
       continue;
     }
 
-    const tx = db.transaction(() => {
-      const result = db
+    const tx = db.transaction(async () => {
+      const result = await db
         .prepare(
           `UPDATE orders
               SET status = 'canceled',
@@ -442,16 +444,18 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
 
       if (Number(result?.changes ?? 0) <= 0) return false;
 
-      db.prepare(
-        `UPDATE listings
+      await db
+        .prepare(
+          `UPDATE listings
             SET status = 'active', updated_at = ?
           WHERE id = ? AND status = 'in_progress'`,
-      ).run(now, String(r.listingId));
+        )
+        .run(now, String(r.listingId));
 
       const title = String(r.listingTitle || 'Listing');
       const orderNumber = r.orderNumber ? String(r.orderNumber) : null;
 
-      createNotification({
+      await createNotification({
         userId: String(r.buyerId),
         type: 'buyer.order_refunded',
         title: 'Order refunded',
@@ -461,7 +465,7 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
         data: { orderId, orderNumber },
       });
 
-      createNotification({
+      await createNotification({
         userId: String(r.sellerId),
         type: 'seller.order_canceled',
         title: 'Order canceled',
@@ -475,7 +479,7 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
     });
 
     try {
-      const didCancel = tx();
+      const didCancel = await tx();
       if (didCancel) canceledCount += 1;
     } catch (e) {
       console.warn('Auto-cancel add-ons transaction failed:', orderId, e);
@@ -485,11 +489,11 @@ async function cancelOverdueAddOnsOrdersAndRefund({ nowIso, limit = 25 } = {}) {
   return { canceledCount };
 }
 
-function completeExpiredAddOnsReviewOrders({ nowIso } = {}) {
+async function completeExpiredAddOnsReviewOrders({ nowIso } = {}) {
   const now = String(nowIso || new Date().toISOString()).trim();
   if (!now) return { completedCount: 0 };
 
-  const due = db
+  const due = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId
@@ -503,26 +507,30 @@ function completeExpiredAddOnsReviewOrders({ nowIso } = {}) {
 
   if (!due.length) return { completedCount: 0 };
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const row of due) {
       const orderId = String(row.id || '').trim();
       const listingId = String(row.listingId || '').trim();
       if (!orderId || !listingId) continue;
 
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET status = 'completed',
                 finalized_reason = COALESCE(finalized_reason, 'auto_addons_review_ended'),
                 finalized_at = COALESCE(finalized_at, ?),
                 updated_at = ?
           WHERE id = ? AND status = 'addons_waiting_approval'`,
-      ).run(now, now, orderId);
+        )
+        .run(now, now, orderId);
 
-      db.prepare(
-        `UPDATE listings
+      await db
+        .prepare(
+          `UPDATE listings
             SET status = 'sold', updated_at = ?
           WHERE id = ? AND status = 'in_progress'`,
-      ).run(now, listingId);
+        )
+        .run(now, listingId);
     }
   })();
 
@@ -532,21 +540,21 @@ function completeExpiredAddOnsReviewOrders({ nowIso } = {}) {
 async function runOrderTimersTick({ nowIso } = {}) {
   const now = String(nowIso || new Date().toISOString()).trim();
   // 1) Auto-complete delivered orders whose review window ended.
-  completeExpiredReviewOrders({ nowIso: now });
+  await completeExpiredReviewOrders({ nowIso: now });
   // 1b) Auto-apply any legacy pending extension requests.
-  autoApproveStaleMoreTimeRequests({ nowIso: now });
+  await autoApproveStaleMoreTimeRequests({ nowIso: now });
   // 2) Auto-complete add-ons once their buyer review window ends.
-  completeExpiredAddOnsReviewOrders({ nowIso: now });
+  await completeExpiredAddOnsReviewOrders({ nowIso: now });
   // 3) Auto-cancel + refund overdue paid orders.
   await cancelOverduePaidOrdersAndRefund({ nowIso: now });
   // 4) Auto-cancel + refund overdue add-ons work.
   await cancelOverdueAddOnsOrdersAndRefund({ nowIso: now });
   // 5) Notify when timers are close to ending.
-  notifyOrdersTimersEndingSoon({ nowIso: now });
+  await notifyOrdersTimersEndingSoon({ nowIso: now });
   return { ok: true };
 }
 
-function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
+async function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
   const now = String(nowIso || new Date().toISOString()).trim();
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) return { approvedCount: 0 };
@@ -558,7 +566,7 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
   let approvedCount = 0;
   let rows = [];
   try {
-    rows = db
+    rows = await db
       .prepare(
         `SELECT id,
                 order_id AS orderId,
@@ -582,7 +590,7 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
 
   if (!Array.isArray(rows) || !rows.length) return { approvedCount: 0 };
 
-  const tx = db.transaction((r) => {
+  const tx = db.transaction(async (r) => {
     const requestId = String(r.id || '').trim();
     const orderId = String(r.orderId || '').trim();
     if (!requestId || !orderId) return false;
@@ -596,7 +604,7 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
     const afterIso = String(r.deadlineAfterIso || '').trim();
     if (!afterIso) return false;
 
-    const orderRow = db
+    const orderRow = await db
       .prepare(
         `SELECT id,
                 status,
@@ -639,52 +647,60 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
       if (statusLower !== 'paid' && statusLower !== 'pending_payment') {
         return false;
       }
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET delivery_due_at = ?,
                 seller_more_time_requested_at = ?,
                 seller_more_time_hours = ?,
                 updated_at = ?
           WHERE id = ?`,
-      ).run(afterIso, now, Number(r.hours ?? 0), now, orderId);
+        )
+        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
     } else if (stage === 'review') {
       if (!deliveredAt) return false;
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET review_ends_at = ?,
                 buyer_more_time_requested_at = ?,
                 buyer_more_time_hours = ?,
                 updated_at = ?
           WHERE id = ?`,
-      ).run(afterIso, now, Number(r.hours ?? 0), now, orderId);
+        )
+        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
     } else if (stage === 'addons') {
       const inAddOnsStage =
         (statusLower.startsWith('addons') || !!addonsStartedAt) &&
         !addonsCompletedAt;
       if (!inAddOnsStage) return false;
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET addons_due_at = ?,
                 seller_more_time_requested_at = ?,
                 seller_more_time_hours = ?,
                 updated_at = ?
           WHERE id = ?`,
-      ).run(afterIso, now, Number(r.hours ?? 0), now, orderId);
+        )
+        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
     } else {
       if (statusLower !== 'addons_waiting_approval' || !addonsCompletedAt) {
         return false;
       }
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET addons_review_ends_at = ?,
                 buyer_more_time_requested_at = ?,
                 buyer_more_time_hours = ?,
                 updated_at = ?
           WHERE id = ?`,
-      ).run(afterIso, now, Number(r.hours ?? 0), now, orderId);
+        )
+        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
     }
 
-    const info = db
+    const info = await db
       .prepare(
         `UPDATE order_more_time_requests
             SET status = 'applied',
@@ -701,7 +717,7 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
 
   for (const r of rows) {
     try {
-      const didApprove = tx(r);
+      const didApprove = await tx(r);
       if (didApprove) approvedCount += 1;
     } catch {
       // best-effort
@@ -711,7 +727,7 @@ function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
   return { approvedCount };
 }
 
-function notifyOrdersTimersEndingSoon({ nowIso }) {
+async function notifyOrdersTimersEndingSoon({ nowIso }) {
   const now = String(nowIso || new Date().toISOString()).trim();
   const nowMs = new Date(now).getTime();
   if (!Number.isFinite(nowMs)) return { ok: false };
@@ -721,7 +737,7 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
 
   // Seller: delivery deadline in <= 5 hours (status=paid)
   try {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT o.id,
                 o.order_number AS orderNumber,
@@ -740,8 +756,8 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
       )
       .all(now, cutoffIso);
 
-    const tx = db.transaction((r) => {
-      createNotification({
+    const tx = db.transaction(async (r) => {
+      await createNotification({
         userId: String(r.sellerId),
         type: 'seller.delivery_due_soon',
         title: 'Delivery deadline soon',
@@ -755,17 +771,19 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
         },
       });
 
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET seller_delivery_due_soon_notified_at = ?,
                 updated_at = updated_at
           WHERE id = ?`,
-      ).run(now, String(r.id));
+        )
+        .run(now, String(r.id));
     });
 
     for (const r of rows) {
       try {
-        tx(r);
+        await tx(r);
       } catch {
         // Best-effort notifications; ignore per-row failures.
       }
@@ -776,7 +794,7 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
 
   // Buyer: review window ends in <= 5 hours (status=delivered)
   try {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT o.id,
                 o.order_number AS orderNumber,
@@ -795,8 +813,8 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
       )
       .all(now, cutoffIso);
 
-    const tx = db.transaction((r) => {
-      createNotification({
+    const tx = db.transaction(async (r) => {
+      await createNotification({
         userId: String(r.buyerId),
         type: 'buyer.review_ends_soon',
         title: 'Review window ending soon',
@@ -810,17 +828,19 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
         },
       });
 
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET buyer_review_ends_soon_notified_at = ?,
                 updated_at = updated_at
           WHERE id = ?`,
-      ).run(now, String(r.id));
+        )
+        .run(now, String(r.id));
     });
 
     for (const r of rows) {
       try {
-        tx(r);
+        await tx(r);
       } catch {
         // Best-effort notifications; ignore per-row failures.
       }
@@ -831,7 +851,7 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
 
   // Seller: add-ons due in <= 5 hours (status=addons)
   try {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT o.id,
                 o.order_number AS orderNumber,
@@ -852,8 +872,8 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
       )
       .all(now, cutoffIso);
 
-    const tx = db.transaction((r) => {
-      createNotification({
+    const tx = db.transaction(async (r) => {
+      await createNotification({
         userId: String(r.sellerId),
         type: 'seller.addons_due_soon',
         title: 'Add-ons deadline soon',
@@ -867,17 +887,19 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
         },
       });
 
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET seller_addons_due_soon_notified_at = ?,
                 updated_at = updated_at
           WHERE id = ?`,
-      ).run(now, String(r.id));
+        )
+        .run(now, String(r.id));
     });
 
     for (const r of rows) {
       try {
-        tx(r);
+        await tx(r);
       } catch {
         // Best-effort notifications; ignore per-row failures.
       }
@@ -888,7 +910,7 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
 
   // Buyer: add-ons review window ends in <= 5 hours (status=addons_waiting_approval)
   try {
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT o.id,
                 o.order_number AS orderNumber,
@@ -908,8 +930,8 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
       )
       .all(now, cutoffIso);
 
-    const tx = db.transaction((r) => {
-      createNotification({
+    const tx = db.transaction(async (r) => {
+      await createNotification({
         userId: String(r.buyerId),
         type: 'buyer.addons_review_ends_soon',
         title: 'Add-ons review ending soon',
@@ -923,17 +945,19 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
         },
       });
 
-      db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET buyer_addons_review_ends_soon_notified_at = ?,
                 updated_at = updated_at
           WHERE id = ?`,
-      ).run(now, String(r.id));
+        )
+        .run(now, String(r.id));
     });
 
     for (const r of rows) {
       try {
-        tx(r);
+        await tx(r);
       } catch {
         // Best-effort notifications; ignore per-row failures.
       }
@@ -945,14 +969,14 @@ function notifyOrdersTimersEndingSoon({ nowIso }) {
   return { ok: true };
 }
 
-function downloadReceiptPdf(req, res) {
+async function downloadReceiptPdf(req, res) {
   const id = String(req.params.id || '').trim();
   if (!id) return res.status(400).json({ error: 'Missing order id' });
 
   const userId = String(req.user?.id || '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -1026,13 +1050,15 @@ function downloadReceiptPdf(req, res) {
 
   let orderNumber = String(row.orderNumber || '').trim();
   if (!orderNumber) {
-    orderNumber = generateUniqueOrderNumber();
-    db.prepare(
-      `UPDATE orders
+    orderNumber = await generateUniqueOrderNumber();
+    await db
+      .prepare(
+        `UPDATE orders
           SET order_number = COALESCE(order_number, ?),
               updated_at = updated_at
         WHERE id = ?`,
-    ).run(orderNumber, id);
+      )
+      .run(orderNumber, id);
   }
 
   const filename = toSafePdfFilename(`receipt_${orderNumber}`, 'receipt.pdf');
@@ -1408,7 +1434,7 @@ async function createOrder(req, res) {
     ? req.body.selectedAddOns
     : [];
 
-  const listing = db
+  const listing = await db
     .prepare(
       `SELECT id,
               seller_id AS sellerId,
@@ -1475,7 +1501,7 @@ async function createOrder(req, res) {
 
   let orderNumber = null;
   for (let attempt = 0; attempt < 10; attempt++) {
-    orderNumber = generateUniqueOrderNumber();
+    orderNumber = await generateUniqueOrderNumber();
     try {
       insert.run(
         id,
@@ -1535,7 +1561,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
   const stripePaymentIntentId = String(paymentIntentId ?? '').trim();
   if (!stripePaymentIntentId) throw new Error('paymentIntentId is required');
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM orders
@@ -1545,7 +1571,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
     .get(stripePaymentIntentId);
   if (existing?.id) return { orderId: String(existing.id) };
 
-  const checkout = db
+  const checkout = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -1573,7 +1599,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
   const reviewEndsAt = null;
   // If it was left open and expired, still allow finalize if Stripe succeeded.
 
-  const listing = db
+  const listing = await db
     .prepare(
       `SELECT id,
               seller_id AS sellerId,
@@ -1592,7 +1618,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
   const id = globalThis.crypto?.randomUUID
     ? globalThis.crypto.randomUUID()
     : require('crypto').randomUUID();
-  const orderNumber = generateUniqueOrderNumber();
+  const orderNumber = await generateUniqueOrderNumber();
 
   const selectedAddOns = safeJsonParse(checkout.selectedAddOnsJson, []);
 
@@ -1613,9 +1639,9 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
     : defaultBuyerBps;
 
   // Transaction: create order, mark listing in progress, mark checkout finalized.
-  const tx = db.transaction(() => {
+  const tx = db.transaction(async () => {
     // If listing already has an order, only allow when it's for the same payment intent.
-    const already = db
+    const already = await db
       .prepare(
         `SELECT id, stripe_payment_intent_id AS stripePaymentIntentId
            FROM orders
@@ -1637,7 +1663,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
     let sellerPlatformFeeBps = baseSellerPlatformFeeBps;
 
     try {
-      const userRow = db
+      const userRow = await db
         .prepare(
           `SELECT used_free_first_sale_platform_fee AS used
              FROM users
@@ -1649,7 +1675,7 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
 
       if (!used) {
         // Ensure state row exists even if table was added to an existing DB.
-        const state = db
+        const state = await db
           .prepare(
             `SELECT free_first_sale_slots_remaining AS remaining
                FROM platform_fee_promo_state
@@ -1663,18 +1689,22 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
           sellerPlatformFeeBps = 0;
           const nowIso = now;
 
-          db.prepare(
-            `UPDATE users
+          await db
+            .prepare(
+              `UPDATE users
                 SET used_free_first_sale_platform_fee = 1
               WHERE id = ? AND used_free_first_sale_platform_fee = 0`,
-          ).run(String(listing.sellerId));
+            )
+            .run(String(listing.sellerId));
 
-          db.prepare(
-            `UPDATE platform_fee_promo_state
+          await db
+            .prepare(
+              `UPDATE platform_fee_promo_state
                 SET free_first_sale_slots_remaining = free_first_sale_slots_remaining - 1,
                     updated_at = ?
               WHERE id = 1 AND free_first_sale_slots_remaining > 0`,
-          ).run(nowIso);
+            )
+            .run(nowIso);
         }
       }
     } catch {
@@ -1691,8 +1721,9 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
 
     const buyerServiceFeeBps = baseBuyerServiceFeeBps;
 
-    db.prepare(
-      `INSERT INTO orders (
+    await db
+      .prepare(
+        `INSERT INTO orders (
         id,
         order_number,
         listing_id,
@@ -1713,31 +1744,32 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
         created_at,
         updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      orderNumber,
-      String(checkout.listingId),
-      String(checkout.buyerId),
-      String(listing.sellerId),
-      'paid',
-      deliveryDueAt,
-      reviewEndsAt,
-      JSON.stringify(Array.isArray(selectedAddOns) ? selectedAddOns : []),
-      listingPriceUsd,
-      addOnsTotalUsd,
-      platformFeeUsd,
-      sellerPlatformFeeBps,
-      buyerServiceFeeBps,
-      Number(checkout.totalUsd ?? 0),
-      stripePaymentIntentId,
-      now,
-      now,
-      now,
-    );
+      )
+      .run(
+        id,
+        orderNumber,
+        String(checkout.listingId),
+        String(checkout.buyerId),
+        String(listing.sellerId),
+        'paid',
+        deliveryDueAt,
+        reviewEndsAt,
+        JSON.stringify(Array.isArray(selectedAddOns) ? selectedAddOns : []),
+        listingPriceUsd,
+        addOnsTotalUsd,
+        platformFeeUsd,
+        sellerPlatformFeeBps,
+        buyerServiceFeeBps,
+        Number(checkout.totalUsd ?? 0),
+        stripePaymentIntentId,
+        now,
+        now,
+        now,
+      );
 
     // Notify seller: new paid order received.
     // Uses the existing v1 notification type allowed by the notifications controller.
-    createNotification({
+    await createNotification({
       userId: String(listing.sellerId),
       type: 'seller.new_order_received',
       title: 'New order received',
@@ -1755,28 +1787,34 @@ async function finalizePaidOrderFromPaymentIntent({ paymentIntentId }) {
 
     // Hide listing from public by moving it to in_progress.
     if (String(listing.status) === 'active') {
-      db.prepare(
-        `UPDATE listings SET status = 'in_progress', updated_at = ? WHERE id = ?`,
-      ).run(now, String(checkout.listingId));
+      await db
+        .prepare(
+          `UPDATE listings SET status = 'in_progress', updated_at = ? WHERE id = ?`,
+        )
+        .run(now, String(checkout.listingId));
     }
 
-    db.prepare(
-      `UPDATE checkout_intents
+    await db
+      .prepare(
+        `UPDATE checkout_intents
           SET status = 'finalized', updated_at = ?
         WHERE id = ?`,
-    ).run(now, String(checkout.id));
+      )
+      .run(now, String(checkout.id));
 
     // Close any other expired/open locks for this listing.
-    db.prepare(
-      `UPDATE checkout_intents
+    await db
+      .prepare(
+        `UPDATE checkout_intents
           SET status = 'closed', updated_at = ?
         WHERE listing_id = ?
           AND status = 'open'
           AND id <> ?`,
-    ).run(now, String(checkout.listingId), String(checkout.id));
+      )
+      .run(now, String(checkout.listingId), String(checkout.id));
   });
 
-  tx();
+  await tx();
   return { orderId: id };
 }
 
@@ -1796,7 +1834,7 @@ async function finalizePaidOrder(req, res) {
     return res.status(400).json({ error: 'Payment is not completed' });
   }
 
-  const checkout = db
+  const checkout = await db
     .prepare(
       `SELECT buyer_id AS buyerId
          FROM checkout_intents
@@ -1814,8 +1852,6 @@ async function finalizePaidOrder(req, res) {
       paymentIntentId,
     });
     return res.json({ order: { id: orderId } });
-    tx();
-    return res.json({ order: { id } });
   } catch (e) {
     const status = typeof e?.status === 'number' ? e.status : 500;
     const msg = e instanceof Error ? e.message : 'Could not create order';
@@ -1830,7 +1866,7 @@ async function markDelivered(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.seller_id AS sellerId,
@@ -1986,8 +2022,9 @@ async function markDelivered(req, res) {
     }
   }
 
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET status = 'delivered',
             delivered_at = COALESCE(delivered_at, ?),
             review_ends_at = CASE
@@ -2004,23 +2041,24 @@ async function markDelivered(req, res) {
             delivery_repo_message = COALESCE(?, delivery_repo_message),
             updated_at = ?
       WHERE id = ?`,
-  ).run(
-    now,
-    // First submit: reset any prefilled review_ends_at to now+48.
-    reviewEndsAtFirstDelivery,
-    // Subsequent submits: backfill only if missing.
-    reviewEndsAtFromExistingDelivery,
-    uploadedZip?.url ?? null,
-    uploadedZip?.publicId ?? null,
-    hasNewZip ? (uploadedZip?.filename ?? null) : null,
-    hasNewZip && req.file?.buffer ? req.file.buffer.length : null,
-    hasNewRepo ? repoLinkRaw : null,
-    hasNewRepo ? buyerGithubUsernameRaw || null : null,
-    hasNewRepo ? repoEmailRaw || null : null,
-    hasNewRepo ? repoMessageRaw || null : null,
-    now,
-    id,
-  );
+    )
+    .run(
+      now,
+      // First submit: reset any prefilled review_ends_at to now+48.
+      reviewEndsAtFirstDelivery,
+      // Subsequent submits: backfill only if missing.
+      reviewEndsAtFromExistingDelivery,
+      uploadedZip?.url ?? null,
+      uploadedZip?.publicId ?? null,
+      hasNewZip ? (uploadedZip?.filename ?? null) : null,
+      hasNewZip && req.file?.buffer ? req.file.buffer.length : null,
+      hasNewRepo ? repoLinkRaw : null,
+      hasNewRepo ? buyerGithubUsernameRaw || null : null,
+      hasNewRepo ? repoEmailRaw || null : null,
+      hasNewRepo ? repoMessageRaw || null : null,
+      now,
+      id,
+    );
 
   return res.json({ ok: true });
 }
@@ -2032,7 +2070,7 @@ async function uploadDeliveryZipDraft(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.seller_id AS sellerId,
@@ -2111,22 +2149,24 @@ async function uploadDeliveryZipDraft(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET delivery_zip_url = ?,
             delivery_zip_public_id = ?,
             delivery_zip_filename = ?,
             delivery_zip_size_bytes = ?,
             updated_at = ?
       WHERE id = ?`,
-  ).run(
-    uploadedZip?.url ?? null,
-    uploadedZip?.publicId ?? null,
-    uploadedZip?.filename ?? null,
-    req.file?.buffer ? req.file.buffer.length : null,
-    now,
-    id,
-  );
+    )
+    .run(
+      uploadedZip?.url ?? null,
+      uploadedZip?.publicId ?? null,
+      uploadedZip?.filename ?? null,
+      req.file?.buffer ? req.file.buffer.length : null,
+      now,
+      id,
+    );
 
   return res.json({ ok: true });
 }
@@ -2138,7 +2178,7 @@ async function updateDeliveryRepoDraft(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.seller_id AS sellerId,
@@ -2177,22 +2217,24 @@ async function updateDeliveryRepoDraft(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET delivery_repo_link = ?,
             delivery_repo_username = ?,
             delivery_repo_email = ?,
             delivery_repo_message = ?,
             updated_at = ?
       WHERE id = ?`,
-  ).run(
-    repoLinkRaw,
-    buyerGithubUsernameRaw || null,
-    repoEmailRaw || null,
-    repoMessageRaw || null,
-    now,
-    id,
-  );
+    )
+    .run(
+      repoLinkRaw,
+      buyerGithubUsernameRaw || null,
+      repoEmailRaw || null,
+      repoMessageRaw || null,
+      now,
+      id,
+    );
 
   return res.json({ ok: true });
 }
@@ -2204,7 +2246,7 @@ async function createDeliveryZipUploadSignature(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.seller_id AS sellerId,
@@ -2237,7 +2279,7 @@ async function markCompleted(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.buyer_id AS buyerId,
@@ -2276,13 +2318,15 @@ async function markCompleted(req, res) {
 
   if (status === 'delivered' && hasAddOns) {
     const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET status = 'addons',
               addons_started_at = COALESCE(addons_started_at, ?),
               updated_at = ?
         WHERE id = ? AND status = 'delivered'`,
-    ).run(now, now, id);
+      )
+      .run(now, now, id);
 
     return res.json({ ok: true, status: 'addons' });
   }
@@ -2302,9 +2346,10 @@ async function markCompleted(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.transaction(() => {
-    db.prepare(
-      `UPDATE orders
+  await db.transaction(async () => {
+    await db
+      .prepare(
+        `UPDATE orders
           SET status = 'completed',
               addons_started_at = COALESCE(addons_started_at, CASE WHEN status = 'addons_waiting_approval' THEN ? ELSE addons_started_at END),
               addons_completed_at = COALESCE(addons_completed_at, CASE WHEN status = 'addons_waiting_approval' THEN ? ELSE addons_completed_at END),
@@ -2316,14 +2361,17 @@ async function markCompleted(req, res) {
               END,
               updated_at = ?
         WHERE id = ?`,
-    ).run(now, now, now, now, now, id);
+      )
+      .run(now, now, now, now, now, id);
 
     // Move listing from in_progress to sold so it drops from seller listings panel.
-    db.prepare(
-      `UPDATE listings
+    await db
+      .prepare(
+        `UPDATE listings
           SET status = 'sold', screenshots_json = NULL, updated_at = ?
         WHERE id = ? AND status = 'in_progress'`,
-    ).run(now, String(row.listingId));
+      )
+      .run(now, String(row.listingId));
   })();
 
   return res.json({ ok: true, status: 'completed' });
@@ -2336,7 +2384,7 @@ async function markAddOnsCompleted(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.seller_id AS sellerId,
@@ -2370,14 +2418,16 @@ async function markAddOnsCompleted(req, res) {
 
   const now = new Date().toISOString();
   const addonsReviewEndsAt = addHoursToIso(now, ADDONS_REVIEW_WINDOW_HOURS);
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET status = 'addons_waiting_approval',
             addons_completed_at = COALESCE(addons_completed_at, ?),
             addons_review_ends_at = COALESCE(addons_review_ends_at, ?),
             updated_at = ?
       WHERE id = ? AND status = 'addons'`,
-  ).run(now, addonsReviewEndsAt, now, id);
+    )
+    .run(now, addonsReviewEndsAt, now, id);
 
   return res.json({ ok: true, status: 'addons_waiting_approval' });
 }
@@ -2390,12 +2440,12 @@ async function getOrder(req, res) {
   // Opportunistically sync expired order timers so status-driven UI stays correct
   // even if the background tick has not run yet.
   const nowIso = new Date().toISOString();
-  completeExpiredReviewOrders({ nowIso });
-  completeExpiredAddOnsReviewOrders({ nowIso });
+  await completeExpiredReviewOrders({ nowIso });
+  await completeExpiredAddOnsReviewOrders({ nowIso });
   await cancelOverduePaidOrdersAndRefund({ nowIso });
   await cancelOverdueAddOnsOrdersAndRefund({ nowIso });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -2457,13 +2507,15 @@ async function getOrder(req, res) {
 
   let orderNumber = String(row.orderNumber ?? '').trim();
   if (!orderNumber) {
-    orderNumber = generateUniqueOrderNumber();
-    db.prepare(
-      `UPDATE orders
+    orderNumber = await generateUniqueOrderNumber();
+    await db
+      .prepare(
+        `UPDATE orders
           SET order_number = COALESCE(order_number, ?),
               updated_at = updated_at
         WHERE id = ?`,
-    ).run(orderNumber, id);
+      )
+      .run(orderNumber, id);
   }
 
   const viewerRole =
@@ -2536,8 +2588,9 @@ async function getOrder(req, res) {
   // Backfill persisted deadlines (legacy orders).
   // Keep updated_at stable by writing updated_at = updated_at.
   try {
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET delivery_due_at = COALESCE(delivery_due_at, ?),
               -- Only backfill review_ends_at after delivery exists.
               review_ends_at = CASE
@@ -2551,7 +2604,8 @@ async function getOrder(req, res) {
               END,
               updated_at = updated_at
         WHERE id = ?`,
-    ).run(deliveryDueAt, reviewEndsAt, addonsDueAt, addonsReviewEndsAt, id);
+      )
+      .run(deliveryDueAt, reviewEndsAt, addonsDueAt, addonsReviewEndsAt, id);
   } catch {
     // Best-effort backfill only.
   }
@@ -2574,11 +2628,11 @@ async function getOrder(req, res) {
     viewerRole === 'seller' ? true : Boolean(deliveredAtIso);
   const canExposeDelivery = !buyerDeliveryRestricted && deliveryVisibleToViewer;
 
-  const moreTimeRequests = listMoreTimeRequests(id);
+  const moreTimeRequests = await listMoreTimeRequests(id);
 
-  const disputeRows = (() => {
+  const disputeRows = await (async () => {
     try {
-      return db
+      return await db
         .prepare(
           `SELECT id,
                   stage,
@@ -2597,7 +2651,7 @@ async function getOrder(req, res) {
     } catch {
       // Backwards-compat: older DBs may not have the seed_image_message_ids column yet.
       try {
-        return db
+        return await db
           .prepare(
             `SELECT id,
                     stage,
@@ -2731,7 +2785,7 @@ async function downloadDeliveryZip(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -2857,7 +2911,7 @@ async function requestMoreTime(req, res) {
       .json({ error: 'hours must be 24, 36, 48, 72, or 120' });
   }
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.buyer_id AS buyerId,
@@ -2970,7 +3024,7 @@ async function requestMoreTime(req, res) {
 
   // Enforce the per-stage 2-request limit.
   // Each stage is requestable by only one side, so requesterRole is a stable key.
-  const requestCountRow = db
+  const requestCountRow = await db
     .prepare(
       `SELECT COUNT(*) AS cnt
          FROM order_more_time_requests
@@ -2987,9 +3041,10 @@ async function requestMoreTime(req, res) {
   const requesterId = userId;
   const requestId = newId('more_time');
 
-  const insertRequest = (fields) => {
-    db.prepare(
-      `INSERT INTO order_more_time_requests (
+  const insertRequest = async (fields) => {
+    await db
+      .prepare(
+        `INSERT INTO order_more_time_requests (
           id,
           order_id,
           stage,
@@ -3005,22 +3060,23 @@ async function requestMoreTime(req, res) {
           deadline_before_iso,
           deadline_after_iso
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      requestId,
-      id,
-      stage,
-      requesterId,
-      requesterRole,
-      hours,
-      fields.status,
-      now,
-      fields.decidedAt,
-      fields.decidedById,
-      fields.decidedByRole,
-      fields.appliedAt,
-      fields.deadlineBeforeIso,
-      fields.deadlineAfterIso,
-    );
+      )
+      .run(
+        requestId,
+        id,
+        stage,
+        requesterId,
+        requesterRole,
+        hours,
+        fields.status,
+        now,
+        fields.decidedAt,
+        fields.decidedById,
+        fields.decidedByRole,
+        fields.appliedAt,
+        fields.deadlineBeforeIso,
+        fields.deadlineAfterIso,
+      );
   };
 
   if (inAddOnsStage) {
@@ -3041,16 +3097,18 @@ async function requestMoreTime(req, res) {
       return res.status(500).json({ error: 'Could not compute new deadline' });
     }
 
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET addons_due_at = ?,
               seller_more_time_requested_at = ?,
               seller_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(nextDue, now, hours, now, id);
+      )
+      .run(nextDue, now, hours, now, id);
 
-    insertRequest({
+    await insertRequest({
       status: 'applied',
       decidedAt: now,
       decidedById: requesterId,
@@ -3089,16 +3147,18 @@ async function requestMoreTime(req, res) {
       return res.status(500).json({ error: 'Could not compute new deadline' });
     }
 
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET addons_review_ends_at = ?,
               buyer_more_time_requested_at = ?,
               buyer_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(nextEnds, now, hours, now, id);
+      )
+      .run(nextEnds, now, hours, now, id);
 
-    insertRequest({
+    await insertRequest({
       status: 'applied',
       decidedAt: now,
       decidedById: requesterId,
@@ -3135,16 +3195,18 @@ async function requestMoreTime(req, res) {
       return res.status(500).json({ error: 'Could not compute new deadline' });
     }
 
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET review_ends_at = ?,
               buyer_more_time_requested_at = ?,
               buyer_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(nextEnds, now, hours, now, id);
+      )
+      .run(nextEnds, now, hours, now, id);
 
-    insertRequest({
+    await insertRequest({
       status: 'applied',
       decidedAt: now,
       decidedById: requesterId,
@@ -3183,16 +3245,18 @@ async function requestMoreTime(req, res) {
 
   // Final (2nd) request applies immediately, same as the first.
 
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET delivery_due_at = ?,
             seller_more_time_requested_at = ?,
             seller_more_time_hours = ?,
             updated_at = ?
       WHERE id = ?`,
-  ).run(nextDue, now, hours, now, id);
+    )
+    .run(nextDue, now, hours, now, id);
 
-  insertRequest({
+  await insertRequest({
     status: 'applied',
     decidedAt: now,
     decidedById: requesterId,
@@ -3221,7 +3285,7 @@ async function approveMoreTimeRequest(req, res) {
   if (!requestId)
     return res.status(400).json({ error: 'Request id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT o.id,
               o.buyer_id AS buyerId,
@@ -3269,7 +3333,7 @@ async function approveMoreTimeRequest(req, res) {
       .json({ error: 'Resolve dispute before approving more time' });
   }
 
-  const reqRow = db
+  const reqRow = await db
     .prepare(
       `SELECT id,
               stage,
@@ -3383,52 +3447,62 @@ async function approveMoreTimeRequest(req, res) {
   const now = new Date().toISOString();
 
   if (stage === 'delivery') {
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET delivery_due_at = ?,
               seller_more_time_requested_at = ?,
               seller_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(afterIso, now, reqRow.hours, now, orderId);
+      )
+      .run(afterIso, now, reqRow.hours, now, orderId);
   } else if (stage === 'review') {
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET review_ends_at = ?,
               buyer_more_time_requested_at = ?,
               buyer_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(afterIso, now, reqRow.hours, now, orderId);
+      )
+      .run(afterIso, now, reqRow.hours, now, orderId);
   } else if (stage === 'addons') {
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET addons_due_at = ?,
               seller_more_time_requested_at = ?,
               seller_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(afterIso, now, reqRow.hours, now, orderId);
+      )
+      .run(afterIso, now, reqRow.hours, now, orderId);
   } else {
-    db.prepare(
-      `UPDATE orders
+    await db
+      .prepare(
+        `UPDATE orders
           SET addons_review_ends_at = ?,
               buyer_more_time_requested_at = ?,
               buyer_more_time_hours = ?,
               updated_at = ?
         WHERE id = ?`,
-    ).run(afterIso, now, reqRow.hours, now, orderId);
+      )
+      .run(afterIso, now, reqRow.hours, now, orderId);
   }
 
-  db.prepare(
-    `UPDATE order_more_time_requests
+  await db
+    .prepare(
+      `UPDATE order_more_time_requests
         SET status = 'approved',
             decided_at = ?,
             decided_by_id = ?,
             decided_by_role = ?,
             applied_at = COALESCE(applied_at, ?)
       WHERE id = ? AND order_id = ? AND status = 'pending'`,
-  ).run(now, userId, approverRole, now, requestId, orderId);
+    )
+    .run(now, userId, approverRole, now, requestId, orderId);
 
   return res.json({ ok: true });
 }
@@ -3444,7 +3518,7 @@ async function declineMoreTimeRequest(req, res) {
   if (!requestId)
     return res.status(400).json({ error: 'Request id is required' });
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -3481,7 +3555,7 @@ async function declineMoreTimeRequest(req, res) {
       .json({ error: 'Resolve dispute before declining more time' });
   }
 
-  const reqRow = db
+  const reqRow = await db
     .prepare(
       `SELECT id,
               stage,
@@ -3511,14 +3585,16 @@ async function declineMoreTimeRequest(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE order_more_time_requests
+  await db
+    .prepare(
+      `UPDATE order_more_time_requests
         SET status = 'declined',
             decided_at = ?,
             decided_by_id = ?,
             decided_by_role = ?
       WHERE id = ? AND order_id = ? AND status = 'pending'`,
-  ).run(now, userId, approverRole, requestId, orderId);
+    )
+    .run(now, userId, approverRole, requestId, orderId);
 
   return res.json({ ok: true });
 }
@@ -3530,7 +3606,7 @@ async function openDispute(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Order id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -3606,7 +3682,7 @@ async function openDispute(req, res) {
       ? 'addons'
       : 'delivery';
 
-  const existingOpen = db
+  const existingOpen = await db
     .prepare(
       `SELECT id,
               stage,
@@ -3641,8 +3717,9 @@ async function openDispute(req, res) {
       ? globalThis.crypto.randomUUID()
       : require('crypto').randomUUID();
 
-    db.prepare(
-      `INSERT INTO order_disputes (
+    await db
+      .prepare(
+        `INSERT INTO order_disputes (
           id,
           order_id,
           stage,
@@ -3655,34 +3732,38 @@ async function openDispute(req, res) {
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
-    ).run(
-      disputeId,
-      id,
-      disputeStage,
-      openedAt,
-      reasonRaw || null,
-      otherReasonRaw || null,
-      messageRaw || null,
-      openedAt,
-      openedAt,
-    );
+      )
+      .run(
+        disputeId,
+        id,
+        disputeStage,
+        openedAt,
+        reasonRaw || null,
+        otherReasonRaw || null,
+        messageRaw || null,
+        openedAt,
+        openedAt,
+      );
   } else if (markEdited) {
     // Update the current open dispute for this stage (no-op for empty fields).
-    db.prepare(
-      `UPDATE order_disputes
+    await db
+      .prepare(
+        `UPDATE order_disputes
           SET reason = COALESCE(NULLIF(?, ''), reason),
               other_reason = COALESCE(NULLIF(?, ''), other_reason),
               message = COALESCE(NULLIF(?, ''), message),
               edited_at = COALESCE(edited_at, ?),
               updated_at = ?
         WHERE id = ? AND order_id = ? AND resolved_at IS NULL`,
-    ).run(reasonRaw, otherReasonRaw, messageRaw, editedAt, now, disputeId, id);
+      )
+      .run(reasonRaw, otherReasonRaw, messageRaw, editedAt, now, disputeId, id);
   }
 
   // Keep legacy order-level dispute fields as "current dispute".
   // This preserves existing UI + dashboard logic, while history lives in order_disputes.
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET dispute_opened_at = ?,
             dispute_opened_stage = ?,
             dispute_resolved_at = NULL,
@@ -3692,19 +3773,20 @@ async function openDispute(req, res) {
             dispute_edited_at = COALESCE(dispute_edited_at, ?),
             updated_at = ?
       WHERE id = ?`,
-  ).run(
-    openedAt,
-    disputeStage,
-    reasonRaw,
-    otherReasonRaw,
-    messageRaw,
-    editedAt,
-    now,
-    id,
-  );
+    )
+    .run(
+      openedAt,
+      disputeStage,
+      reasonRaw,
+      otherReasonRaw,
+      messageRaw,
+      editedAt,
+      now,
+      id,
+    );
 
   // Create/get stage-specific dispute thread.
-  const existingThread = db
+  const existingThread = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -3721,8 +3803,9 @@ async function openDispute(req, res) {
       ? globalThis.crypto.randomUUID()
       : require('crypto').randomUUID();
 
-    db.prepare(
-      `INSERT INTO message_threads (
+    await db
+      .prepare(
+        `INSERT INTO message_threads (
           id,
           listing_id,
           buyer_id,
@@ -3733,22 +3816,23 @@ async function openDispute(req, res) {
           created_at,
           updated_at
        ) VALUES (?, ?, ?, ?, 'dispute', ?, ?, ?, ?)`,
-    ).run(
-      threadId,
-      String(row.listingId),
-      String(row.buyerId),
-      String(row.sellerId),
-      id,
-      disputeStage,
-      now,
-      now,
-    );
+      )
+      .run(
+        threadId,
+        String(row.listingId),
+        String(row.buyerId),
+        String(row.sellerId),
+        id,
+        disputeStage,
+        now,
+        now,
+      );
   }
 
   // Notify seller once per newly created stage dispute.
   if (!existingOpen?.id) {
     try {
-      createNotification({
+      await createNotification({
         userId: String(row.sellerId),
         type: 'seller.dispute_opened',
         title: 'Dispute opened',
@@ -3780,7 +3864,7 @@ async function openDispute(req, res) {
   });
 }
 
-function cancelDispute(req, res) {
+async function cancelDispute(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -3796,7 +3880,7 @@ function cancelDispute(req, res) {
 
   const requestedStage = normalizeDisputeStage(req.body?.stage);
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -3833,26 +3917,30 @@ function cancelDispute(req, res) {
     : normalizeDisputeStage(row.disputeOpenedStage);
 
   // Resolve the stage-specific dispute record (history), best-effort.
-  db.prepare(
-    `UPDATE order_disputes
+  await db
+    .prepare(
+      `UPDATE order_disputes
         SET resolved_at = COALESCE(resolved_at, ?),
             updated_at = ?
       WHERE order_id = ?
         AND stage = ?
         AND resolved_at IS NULL`,
-  ).run(now, now, id, stageToResolve);
+    )
+    .run(now, now, id, stageToResolve);
 
-  db.prepare(
-    `UPDATE orders
+  await db
+    .prepare(
+      `UPDATE orders
         SET dispute_resolved_at = COALESCE(dispute_resolved_at, ?),
             updated_at = ?
       WHERE id = ?`,
-  ).run(now, now, id);
+    )
+    .run(now, now, id);
 
   return res.json({ ok: true, resolvedAt: now, stage: stageToResolve });
 }
 
-function setDisputeSeedImages(req, res) {
+async function setDisputeSeedImages(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -3876,7 +3964,7 @@ function setDisputeSeedImages(req, res) {
     return res.status(400).json({ error: 'Too many messageIds' });
   }
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -3894,7 +3982,7 @@ function setDisputeSeedImages(req, res) {
       .json({ error: 'Only the buyer can finalize dispute screenshots' });
   }
 
-  const disputeRow = db
+  const disputeRow = await db
     .prepare(
       `SELECT id,
               stage,
@@ -3930,7 +4018,7 @@ function setDisputeSeedImages(req, res) {
   }
 
   // Find the dispute thread id for this stage/order.
-  const threadRow = db
+  const threadRow = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -3949,7 +4037,7 @@ function setDisputeSeedImages(req, res) {
   // Validate provided ids belong to the thread and are buyer image-only messages.
   // (Prevents later/manual messages from being hoisted.)
   const placeholders = messageIds.map(() => '?').join(',');
-  const rowsFound = db
+  const rowsFound = await db
     .prepare(
       `SELECT id
          FROM message_thread_messages
@@ -3972,12 +4060,14 @@ function setDisputeSeedImages(req, res) {
   const uniqueIds = Array.from(new Set(validIds));
   const now = new Date().toISOString();
 
-  db.prepare(
-    `UPDATE order_disputes
+  await db
+    .prepare(
+      `UPDATE order_disputes
         SET seed_image_message_ids = ?,
             updated_at = ?
       WHERE id = ? AND order_id = ?`,
-  ).run(JSON.stringify(uniqueIds), now, disputeId, orderId);
+    )
+    .run(JSON.stringify(uniqueIds), now, disputeId, orderId);
 
   return res.json({ ok: true, seedImageMessageIds: uniqueIds });
 }

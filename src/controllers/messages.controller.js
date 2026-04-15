@@ -87,8 +87,8 @@ function toInt(value, { min = 1, max = 500 } = {}) {
   return parsed;
 }
 
-function getThreadOr404({ threadId }) {
-  const row = db
+async function getThreadOr404({ threadId }) {
+  const row = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -129,11 +129,11 @@ function assertThreadParticipant({ threadRow, userId }) {
   return { ok: true, isBuyer, isSeller, deleted };
 }
 
-function listThreads(req, res) {
+async function listThreads(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT t.id,
               t.listing_id AS legacyListingId,
@@ -233,7 +233,7 @@ function listThreads(req, res) {
   return res.json({ threads });
 }
 
-function getThreadMessages(req, res) {
+async function getThreadMessages(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -241,7 +241,7 @@ function getThreadMessages(req, res) {
   if (!threadId)
     return res.status(400).json({ error: 'Thread id is required' });
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
@@ -262,7 +262,7 @@ function getThreadMessages(req, res) {
 
   if (limit) {
     if (beforeId) {
-      const cursor = db
+      const cursor = await db
         .prepare(
           `SELECT id, created_at AS createdAt
              FROM message_thread_messages
@@ -276,7 +276,7 @@ function getThreadMessages(req, res) {
         return res.status(400).json({ error: 'Invalid beforeId' });
       }
 
-      const fetched = db
+      const fetched = await db
         .prepare(
           `SELECT id,
                   sender_id AS senderId,
@@ -307,7 +307,7 @@ function getThreadMessages(req, res) {
       hasMore = fetched.length > limit;
       rows = (hasMore ? fetched.slice(0, limit) : fetched).reverse();
     } else if (afterId) {
-      const cursor = db
+      const cursor = await db
         .prepare(
           `SELECT id, created_at AS createdAt
              FROM message_thread_messages
@@ -321,7 +321,7 @@ function getThreadMessages(req, res) {
         return res.status(400).json({ error: 'Invalid afterId' });
       }
 
-      const fetched = db
+      const fetched = await db
         .prepare(
           `SELECT id,
                   sender_id AS senderId,
@@ -352,7 +352,7 @@ function getThreadMessages(req, res) {
       hasMore = fetched.length > limit;
       rows = hasMore ? fetched.slice(0, limit) : fetched;
     } else {
-      const fetched = db
+      const fetched = await db
         .prepare(
           `SELECT id,
                   sender_id AS senderId,
@@ -374,7 +374,7 @@ function getThreadMessages(req, res) {
       rows = (hasMore ? fetched.slice(0, limit) : fetched).reverse();
     }
   } else {
-    rows = db
+    rows = await db
       .prepare(
         `SELECT id,
                 sender_id AS senderId,
@@ -433,14 +433,14 @@ function getThreadMessages(req, res) {
   const now = new Date().toISOString();
   if (!beforeId) {
     if (participant.isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET buyer_last_read_at = COALESCE(last_message_at, buyer_last_read_at, ?),
                 updated_at = updated_at
           WHERE id = ?`,
       ).run(now, threadId);
     } else {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET seller_last_read_at = COALESCE(last_message_at, seller_last_read_at, ?),
                 updated_at = updated_at
@@ -463,13 +463,13 @@ async function downloadThreadMessageAttachment(req, res) {
   if (!messageId)
     return res.status(400).json({ error: 'Message id is required' });
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
   if (participant.deleted) return res.status(404).json({ error: 'Not Found' });
 
-  const messageRow = db
+  const messageRow = await db
     .prepare(
       `SELECT image_url AS imageUrl,
               image_public_id AS imagePublicId,
@@ -552,7 +552,7 @@ async function downloadThreadMessageAttachment(req, res) {
   }
 }
 
-function createThreadImageUploadSignature(req, res) {
+async function createThreadImageUploadSignature(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -560,7 +560,7 @@ function createThreadImageUploadSignature(req, res) {
   if (!threadId)
     return res.status(400).json({ error: 'Thread id is required' });
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
@@ -596,7 +596,7 @@ function createThreadImageUploadSignature(req, res) {
   }
 }
 
-function sendMessage(req, res) {
+async function sendMessage(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -604,7 +604,7 @@ function sendMessage(req, res) {
   if (!threadId)
     return res.status(400).json({ error: 'Thread id is required' });
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
@@ -650,7 +650,7 @@ function sendMessage(req, res) {
   }
 
   if (replyToId) {
-    const replied = db
+    const replied = await db
       .prepare(
         `SELECT id
            FROM message_thread_messages
@@ -682,7 +682,7 @@ function sendMessage(req, res) {
       return res.status(400).json({ error: 'Invalid listing context' });
     }
 
-    const ref = db
+    const ref = await db
       .prepare(
         `SELECT 1
            FROM message_thread_listing_refs
@@ -704,7 +704,7 @@ function sendMessage(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_messages (
         id,
         thread_id,
@@ -744,7 +744,7 @@ function sendMessage(req, res) {
 
   // Update thread preview + timestamps; also un-delete the sender's copy if needed.
   if (participant.isBuyer) {
-    db.prepare(
+    await db.prepare(
       `UPDATE message_threads
           SET updated_at = ?,
               last_message_at = ?,
@@ -755,7 +755,7 @@ function sendMessage(req, res) {
         WHERE id = ?`,
     ).run(now, now, previewText, now, threadId);
   } else {
-    db.prepare(
+    await db.prepare(
       `UPDATE message_threads
           SET updated_at = ?,
               last_message_at = ?,
@@ -782,7 +782,7 @@ function sendMessage(req, res) {
 
     if (otherUserId && otherUserId !== userId && !otherArchived) {
       if (kind === 'dispute' && orderId) {
-        upsertUnreadNotification({
+        await upsertUnreadNotification({
           userId: otherUserId,
           type: participant.isBuyer
             ? 'seller.dispute_message'
@@ -799,7 +799,7 @@ function sendMessage(req, res) {
           },
         });
       } else {
-        createNotification({
+        await createNotification({
           userId: otherUserId,
           type: participant.isBuyer
             ? 'seller.new_message'
@@ -815,7 +815,7 @@ function sendMessage(req, res) {
       // Mention: only notify the other participant when they are @mentioned.
       const mentionMatches = body.match(/(^|\s)@([a-zA-Z0-9_]{2,30})\b/g);
       if (mentionMatches && mentionMatches.length > 0) {
-        const other = db
+        const other = await db
           .prepare(
             `SELECT id, username
                FROM users
@@ -834,7 +834,7 @@ function sendMessage(req, res) {
           );
 
           if (mentioned.has(otherUsername.toLowerCase())) {
-            createNotification({
+            await createNotification({
               userId: otherUserId,
               type: 'mention',
               title: "You've been mentioned",
@@ -874,7 +874,7 @@ function sendMessage(req, res) {
   });
 }
 
-function setThreadArchived(req, res) {
+async function setThreadArchived(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -884,18 +884,18 @@ function setThreadArchived(req, res) {
 
   const archived = Boolean(req.body?.archived);
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
   if (participant.deleted) return res.status(404).json({ error: 'Not Found' });
 
   if (participant.isBuyer) {
-    db.prepare(
+    await db.prepare(
       `UPDATE message_threads SET buyer_archived = ? WHERE id = ?`,
     ).run(archived ? 1 : 0, threadId);
   } else {
-    db.prepare(
+    await db.prepare(
       `UPDATE message_threads SET seller_archived = ? WHERE id = ?`,
     ).run(archived ? 1 : 0, threadId);
   }
@@ -903,7 +903,7 @@ function setThreadArchived(req, res) {
   return res.json({ ok: true });
 }
 
-function setThreadReadState(req, res) {
+async function setThreadReadState(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -913,7 +913,7 @@ function setThreadReadState(req, res) {
 
   const read = Boolean(req.body?.read);
 
-  const threadRow = getThreadOr404({ threadId });
+  const threadRow = await getThreadOr404({ threadId });
   const participant = assertThreadParticipant({ threadRow, userId });
   if (!participant.ok)
     return res.status(participant.status).json({ error: participant.error });
@@ -922,22 +922,22 @@ function setThreadReadState(req, res) {
   if (read) {
     const stamp = threadRow.lastMessageAt || new Date().toISOString();
     if (participant.isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads SET buyer_last_read_at = ? WHERE id = ?`,
       ).run(stamp, threadId);
     } else {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads SET seller_last_read_at = ? WHERE id = ?`,
       ).run(stamp, threadId);
     }
   } else {
     // Force unread by clearing last_read_at.
     if (participant.isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads SET buyer_last_read_at = NULL WHERE id = ?`,
       ).run(threadId);
     } else {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads SET seller_last_read_at = NULL WHERE id = ?`,
       ).run(threadId);
     }
@@ -946,7 +946,7 @@ function setThreadReadState(req, res) {
   return res.json({ ok: true });
 }
 
-function createOrGetThread(req, res) {
+async function createOrGetThread(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -954,7 +954,7 @@ function createOrGetThread(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'Listing id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id, seller_id AS sellerId, title, status
          FROM listings
@@ -967,7 +967,7 @@ function createOrGetThread(req, res) {
   if (String(listingRow.sellerId) === String(userId))
     return res.status(400).json({ error: 'Cannot message yourself' });
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -983,13 +983,13 @@ function createOrGetThread(req, res) {
   const now = new Date().toISOString();
   if (!threadId) {
     threadId = crypto.randomUUID();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO message_threads (id, listing_id, buyer_id, seller_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(threadId, listingId, userId, listingRow.sellerId, now, now);
   } else {
     // Ensure it's visible for the creator if it was previously deleted.
-    db.prepare(
+    await db.prepare(
       `UPDATE message_threads
           SET buyer_deleted = 0
         WHERE id = ?`,
@@ -997,7 +997,7 @@ function createOrGetThread(req, res) {
   }
 
   // Record listing context (accumulates across multiple listing pages).
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_listing_refs (thread_id, listing_id, created_at)
      VALUES (?, ?, ?)
      ON CONFLICT(thread_id, listing_id) DO UPDATE SET created_at = excluded.created_at`,
@@ -1006,14 +1006,14 @@ function createOrGetThread(req, res) {
   return res.json({ ok: true, thread: { id: threadId } });
 }
 
-function createOrGetThreadByOrder(req, res) {
+async function createOrGetThreadByOrder(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   const orderId = String(req.body?.orderId ?? '').trim();
   if (!orderId) return res.status(400).json({ error: 'Order id is required' });
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id, listing_id AS listingId, buyer_id AS buyerId, seller_id AS sellerId
          FROM orders
@@ -1033,7 +1033,7 @@ function createOrGetThreadByOrder(req, res) {
   if (!isBuyer && !isSeller)
     return res.status(403).json({ error: 'Forbidden' });
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -1049,21 +1049,21 @@ function createOrGetThreadByOrder(req, res) {
   const now = new Date().toISOString();
   if (!threadId) {
     threadId = crypto.randomUUID();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO message_threads (id, listing_id, buyer_id, seller_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(threadId, listingId, buyerId, sellerId, now, now);
   } else {
     // Ensure it's visible for the participant if it was previously deleted.
     if (isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET buyer_deleted = 0
           WHERE id = ?`,
       ).run(threadId);
     }
     if (isSeller) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET seller_deleted = 0
           WHERE id = ?`,
@@ -1072,7 +1072,7 @@ function createOrGetThreadByOrder(req, res) {
   }
 
   // Keep listing context available in the thread.
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_listing_refs (thread_id, listing_id, created_at)
      VALUES (?, ?, ?)
      ON CONFLICT(thread_id, listing_id) DO UPDATE SET created_at = excluded.created_at`,
@@ -1081,7 +1081,7 @@ function createOrGetThreadByOrder(req, res) {
   return res.json({ ok: true, thread: { id: threadId } });
 }
 
-function createOrGetDisputeThreadByOrder(req, res) {
+async function createOrGetDisputeThreadByOrder(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1093,7 +1093,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
     .toLowerCase();
   const stage = stageRaw === 'addons' ? 'addons' : 'delivery';
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -1118,7 +1118,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
 
   // If the thread already exists, always return it (even if the dispute was resolved).
   // This keeps the dispute discussion readable after approval.
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -1134,14 +1134,14 @@ function createOrGetDisputeThreadByOrder(req, res) {
   if (threadId) {
     // Ensure it's visible for the participant if it was previously deleted.
     if (isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET buyer_deleted = 0
           WHERE id = ?`,
       ).run(threadId);
     }
     if (isSeller) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET seller_deleted = 0
           WHERE id = ?`,
@@ -1149,7 +1149,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
     }
 
     // Keep listing context available in the thread.
-    db.prepare(
+    await db.prepare(
       `INSERT INTO message_thread_listing_refs (thread_id, listing_id, created_at)
        VALUES (?, ?, ?)
        ON CONFLICT(thread_id, listing_id) DO UPDATE SET created_at = excluded.created_at`,
@@ -1159,7 +1159,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
   }
 
   // Only allow creating a new thread while the dispute is open.
-  const openDispute = db
+  const openDispute = await db
     .prepare(
       `SELECT id
          FROM order_disputes
@@ -1177,7 +1177,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
 
   if (!threadId) {
     threadId = crypto.randomUUID();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO message_threads (
           id,
           listing_id,
@@ -1194,14 +1194,14 @@ function createOrGetDisputeThreadByOrder(req, res) {
   } else {
     // Ensure it's visible for the participant if it was previously deleted.
     if (isBuyer) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET buyer_deleted = 0
           WHERE id = ?`,
       ).run(threadId);
     }
     if (isSeller) {
-      db.prepare(
+      await db.prepare(
         `UPDATE message_threads
             SET seller_deleted = 0
           WHERE id = ?`,
@@ -1210,7 +1210,7 @@ function createOrGetDisputeThreadByOrder(req, res) {
   }
 
   // Keep listing context available in the thread.
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_listing_refs (thread_id, listing_id, created_at)
      VALUES (?, ?, ?)
      ON CONFLICT(thread_id, listing_id) DO UPDATE SET created_at = excluded.created_at`,

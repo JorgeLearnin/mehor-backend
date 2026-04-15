@@ -27,19 +27,21 @@ function extractMentions(text) {
   return Array.from(out);
 }
 
-function notifyMentionsInQa({
-  text,
-  fromUserId,
-  listingId,
-  questionId,
-  replyId,
-}) {
+async function notifyMentionsInQa(
+  {
+    text,
+    fromUserId,
+    listingId,
+    questionId,
+    replyId,
+  },
+) {
   try {
     const usernames = extractMentions(text);
     if (usernames.length === 0) return;
 
     const placeholders = usernames.map(() => '?').join(',');
-    const rows = db
+    const rows = await db
       .prepare(
         `SELECT id, username
            FROM users
@@ -53,7 +55,7 @@ function notifyMentionsInQa({
       const mentionedId = String(r?.id ?? '').trim();
       if (!mentionedId || mentionedId === String(fromUserId)) continue;
 
-      createNotification({
+      await createNotification({
         userId: mentionedId,
         type: 'mention',
         title: "You've been mentioned",
@@ -204,8 +206,8 @@ function rowToPublicListing(row) {
   };
 }
 
-function getListingById(id) {
-  return db
+async function getListingById(id) {
+  return await db
     .prepare(
       `SELECT id,
               seller_id AS sellerId,
@@ -317,14 +319,14 @@ function formatQaAuthor({ row, listingSellerId }) {
   };
 }
 
-function buildQaThreads({ questionRows, listingSellerId, viewerUserId }) {
+async function buildQaThreads({ questionRows, listingSellerId, viewerUserId }) {
   const rows = Array.isArray(questionRows) ? questionRows : [];
   const questionIds = rows.map((q) => q.id);
 
   const likeRows =
     questionIds.length === 0
       ? []
-      : db
+      : await db
           .prepare(
             `SELECT question_id AS questionId,
                     COUNT(*) AS likesCount,
@@ -346,7 +348,7 @@ function buildQaThreads({ questionRows, listingSellerId, viewerUserId }) {
   const replyRows =
     questionIds.length === 0
       ? []
-      : db
+      : await db
           .prepare(
             `SELECT r.id,
                     r.question_id AS questionId,
@@ -420,7 +422,7 @@ function normalizeUploadedScreenshots(value, listingId) {
     .filter(Boolean);
 }
 
-function createListingScreenshotUploadSignature(req, res) {
+async function createListingScreenshotUploadSignature(req, res) {
   const sellerId = req.user?.id;
   if (!sellerId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -434,7 +436,7 @@ function createListingScreenshotUploadSignature(req, res) {
     return res.status(400).json({ error: 'Invalid screenshot index' });
   }
 
-  const existing = getListingById(listingId);
+  const existing = await getListingById(listingId);
   if (existing && existing.sellerId !== sellerId) {
     return res.status(403).json({ error: 'Not authorized' });
   }
@@ -501,7 +503,7 @@ async function createListing(req, res) {
   }
 
   const id = requestedId || crypto.randomUUID();
-  if (getListingById(id)) {
+  if (await getListingById(id)) {
     return res.status(409).json({ error: 'Listing already exists' });
   }
   const now = new Date().toISOString();
@@ -514,7 +516,7 @@ async function createListing(req, res) {
   const screenshots =
     uploadedScreenshots.length > 0 ? [...uploadedScreenshots] : [];
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO listings (
       id,
       seller_id,
@@ -559,7 +561,7 @@ async function createListing(req, res) {
   return res.json({ ok: true, listing: { id } });
 }
 
-function listPublicListings(req, res) {
+async function listPublicListings(req, res) {
   const page = toInt(req.query?.page, { min: 1, max: 100_000 }) || 1;
   const limit = toInt(req.query?.limit, { min: 1, max: 48 }) || 16;
   const offset = (page - 1) * limit;
@@ -608,7 +610,7 @@ function listPublicListings(req, res) {
 
   const whereSql = where.join(' AND ');
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(*) AS total
          FROM listings
@@ -617,7 +619,7 @@ function listPublicListings(req, res) {
     .get(...args);
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               title,
@@ -640,7 +642,7 @@ function listPublicListings(req, res) {
   return res.json({ listings, total, page, limit });
 }
 
-function searchPublicListings(req, res) {
+async function searchPublicListings(req, res) {
   const qRaw = typeof req.query?.q === 'string' ? req.query.q : '';
   const q = qRaw.trim();
 
@@ -655,7 +657,7 @@ function searchPublicListings(req, res) {
   const escapeLike = (s) => String(s).replace(/[\\%_]/g, (m) => `\\${m}`);
   const like = `%${escapeLike(q)}%`;
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               title,
@@ -683,11 +685,11 @@ function searchPublicListings(req, res) {
   return res.json({ listings });
 }
 
-function getPublicListing(req, res) {
+async function getPublicListing(req, res) {
   const id = req.params?.id;
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT l.id,
               l.seller_id AS sellerId,
@@ -736,7 +738,7 @@ function getPublicListing(req, res) {
   });
 }
 
-function listPublicListingQa(req, res) {
+async function listPublicListingQa(req, res) {
   const listingId = req.params?.id;
   if (!listingId)
     return res.status(400).json({ error: 'Listing id is required' });
@@ -754,7 +756,7 @@ function listPublicListingQa(req, res) {
       .json({ error: 'Provide either questionId or replyId' });
   }
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id, seller_id AS sellerId, status
          FROM listings
@@ -766,7 +768,7 @@ function listPublicListingQa(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(*) AS total
          FROM listing_questions
@@ -777,7 +779,7 @@ function listPublicListingQa(req, res) {
 
   let questionRows;
   if (questionId) {
-    questionRows = db
+    questionRows = await db
       .prepare(
         `SELECT q.id,
                 q.question,
@@ -794,7 +796,7 @@ function listPublicListingQa(req, res) {
       )
       .all(listingId, questionId);
   } else if (replyId) {
-    questionRows = db
+    questionRows = await db
       .prepare(
         `SELECT q.id,
                 q.question,
@@ -812,7 +814,7 @@ function listPublicListingQa(req, res) {
       )
       .all(listingId, replyId);
   } else {
-    questionRows = db
+    questionRows = await db
       .prepare(
         `SELECT q.id,
                 q.question,
@@ -830,7 +832,7 @@ function listPublicListingQa(req, res) {
       .all(listingId, limit, offset);
   }
 
-  const threads = buildQaThreads({
+  const threads = await buildQaThreads({
     questionRows,
     listingSellerId: listingRow.sellerId,
     viewerUserId,
@@ -850,7 +852,7 @@ function listPublicListingQa(req, res) {
   });
 }
 
-function createPublicListingQuestion(req, res) {
+async function createPublicListingQuestion(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -858,7 +860,7 @@ function createPublicListingQuestion(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'Listing id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id, seller_id AS sellerId, status
          FROM listings
@@ -878,12 +880,12 @@ function createPublicListingQuestion(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO listing_questions (id, listing_id, user_id, question, created_at)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(id, listingId, userId, text, now);
 
-  const userRow = db
+  const userRow = await db
     .prepare(
       `SELECT id AS userId,
               username,
@@ -905,7 +907,7 @@ function createPublicListingQuestion(req, res) {
   try {
     const sellerId = String(listingRow?.sellerId ?? '').trim();
     if (sellerId && sellerId !== String(userId)) {
-      const listingTitleRow = db
+      const listingTitleRow = await db
         .prepare(
           `SELECT title
              FROM listings
@@ -917,7 +919,7 @@ function createPublicListingQuestion(req, res) {
       const listingTitle = String(listingTitleRow?.title ?? '').trim();
       const trimmed = text.length > 120 ? `${text.slice(0, 120)}…` : text;
 
-      createNotification({
+      await createNotification({
         userId: sellerId,
         type: 'seller.listing_question',
         title: 'New Q&A question',
@@ -933,7 +935,7 @@ function createPublicListingQuestion(req, res) {
     // Best-effort.
   }
 
-  notifyMentionsInQa({
+  await notifyMentionsInQa({
     text,
     fromUserId: userId,
     listingId,
@@ -957,7 +959,7 @@ function createPublicListingQuestion(req, res) {
   });
 }
 
-function togglePublicListingQuestionLike(req, res) {
+async function togglePublicListingQuestionLike(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -969,7 +971,7 @@ function togglePublicListingQuestionLike(req, res) {
   if (!questionId)
     return res.status(400).json({ error: 'Question id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -981,7 +983,7 @@ function togglePublicListingQuestionLike(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const qRow = db
+  const qRow = await db
     .prepare(
       `SELECT id
          FROM listing_questions
@@ -993,7 +995,7 @@ function togglePublicListingQuestionLike(req, res) {
 
   if (!qRow) return res.status(404).json({ error: 'Not Found' });
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM listing_question_likes
@@ -1005,14 +1007,14 @@ function togglePublicListingQuestionLike(req, res) {
 
   let liked = false;
   if (existing?.id) {
-    db.prepare(`DELETE FROM listing_question_likes WHERE id = ?`).run(
+    await db.prepare(`DELETE FROM listing_question_likes WHERE id = ?`).run(
       existing.id,
     );
     liked = false;
   } else {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO listing_question_likes (id, question_id, user_id, created_at)
        VALUES (?, ?, ?, ?)`,
     ).run(id, questionId, userId, now);
@@ -1020,7 +1022,7 @@ function togglePublicListingQuestionLike(req, res) {
 
     // Notify the question author about the like (best-effort).
     try {
-      const meta = db
+      const meta = await db
         .prepare(
           `SELECT q.user_id AS authorId,
                   q.question AS question,
@@ -1042,7 +1044,7 @@ function togglePublicListingQuestionLike(req, res) {
             ? `${questionText.slice(0, 120)}…`
             : questionText;
 
-        createNotification({
+        await createNotification({
           userId: authorId,
           type: 'qa.question_liked',
           title: 'Your question got a like',
@@ -1059,7 +1061,7 @@ function togglePublicListingQuestionLike(req, res) {
     }
   }
 
-  const likesCountRow = db
+  const likesCountRow = await db
     .prepare(
       `SELECT COUNT(*) AS likesCount
          FROM listing_question_likes
@@ -1071,7 +1073,7 @@ function togglePublicListingQuestionLike(req, res) {
   return res.json({ liked, likesCount });
 }
 
-function createPublicListingReply(req, res) {
+async function createPublicListingReply(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1083,7 +1085,7 @@ function createPublicListingReply(req, res) {
   if (!questionId)
     return res.status(400).json({ error: 'Question id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id, seller_id AS sellerId, status
          FROM listings
@@ -1095,7 +1097,7 @@ function createPublicListingReply(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const qRow = db
+  const qRow = await db
     .prepare(
       `SELECT id
          FROM listing_questions
@@ -1115,14 +1117,14 @@ function createPublicListingReply(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO listing_question_replies (id, question_id, user_id, reply, created_at)
      VALUES (?, ?, ?, ?, ?)`,
   ).run(id, questionId, userId, text, now);
 
   // Notify the question author about the reply (best-effort).
   try {
-    const meta = db
+    const meta = await db
       .prepare(
         `SELECT q.user_id AS authorId,
                 q.question AS question,
@@ -1141,7 +1143,7 @@ function createPublicListingReply(req, res) {
       const questionText = String(meta?.question ?? '').trim();
       const replyTrimmed = text.length > 140 ? `${text.slice(0, 140)}…` : text;
 
-      createNotification({
+      await createNotification({
         userId: authorId,
         type: 'qa.question_replied',
         title: 'New reply to your question',
@@ -1165,7 +1167,7 @@ function createPublicListingReply(req, res) {
     // Best-effort.
   }
 
-  const userRow = db
+  const userRow = await db
     .prepare(
       `SELECT id AS userId,
               username,
@@ -1183,7 +1185,7 @@ function createPublicListingReply(req, res) {
     listingSellerId: listingRow.sellerId,
   });
 
-  notifyMentionsInQa({
+  await notifyMentionsInQa({
     text,
     fromUserId: userId,
     listingId,
@@ -1201,7 +1203,7 @@ function createPublicListingReply(req, res) {
   });
 }
 
-function updatePublicListingQuestion(req, res) {
+async function updatePublicListingQuestion(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1213,7 +1215,7 @@ function updatePublicListingQuestion(req, res) {
   if (!questionId)
     return res.status(400).json({ error: 'Question id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -1225,7 +1227,7 @@ function updatePublicListingQuestion(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const qRow = db
+  const qRow = await db
     .prepare(
       `SELECT id, user_id AS userId
          FROM listing_questions
@@ -1244,7 +1246,7 @@ function updatePublicListingQuestion(req, res) {
   if (text.length > 800)
     return res.status(400).json({ error: 'Question is too long' });
 
-  db.prepare(
+  await db.prepare(
     `UPDATE listing_questions
         SET question = ?
       WHERE id = ?
@@ -1254,7 +1256,7 @@ function updatePublicListingQuestion(req, res) {
   return res.json({ ok: true, id: questionId, text });
 }
 
-function deletePublicListingQuestion(req, res) {
+async function deletePublicListingQuestion(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1266,7 +1268,7 @@ function deletePublicListingQuestion(req, res) {
   if (!questionId)
     return res.status(400).json({ error: 'Question id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -1278,7 +1280,7 @@ function deletePublicListingQuestion(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const qRow = db
+  const qRow = await db
     .prepare(
       `SELECT id, user_id AS userId
          FROM listing_questions
@@ -1292,7 +1294,7 @@ function deletePublicListingQuestion(req, res) {
   if (String(qRow.userId) !== String(userId))
     return res.status(403).json({ error: 'Forbidden' });
 
-  db.prepare(
+  await db.prepare(
     `DELETE FROM listing_questions
       WHERE id = ?
         AND listing_id = ?`,
@@ -1301,7 +1303,7 @@ function deletePublicListingQuestion(req, res) {
   return res.json({ ok: true });
 }
 
-function updatePublicListingReply(req, res) {
+async function updatePublicListingReply(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1316,7 +1318,7 @@ function updatePublicListingReply(req, res) {
   const replyId = req.params?.replyId;
   if (!replyId) return res.status(400).json({ error: 'Reply id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -1328,7 +1330,7 @@ function updatePublicListingReply(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const meta = db
+  const meta = await db
     .prepare(
       `SELECT r.id,
               r.user_id AS userId
@@ -1350,7 +1352,7 @@ function updatePublicListingReply(req, res) {
   if (text.length > 1_200)
     return res.status(400).json({ error: 'Reply is too long' });
 
-  db.prepare(
+  await db.prepare(
     `UPDATE listing_question_replies
         SET reply = ?
       WHERE id = ?
@@ -1360,7 +1362,7 @@ function updatePublicListingReply(req, res) {
   return res.json({ ok: true, id: replyId, text });
 }
 
-function deletePublicListingReply(req, res) {
+async function deletePublicListingReply(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -1375,7 +1377,7 @@ function deletePublicListingReply(req, res) {
   const replyId = req.params?.replyId;
   if (!replyId) return res.status(400).json({ error: 'Reply id is required' });
 
-  const listingRow = db
+  const listingRow = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -1387,7 +1389,7 @@ function deletePublicListingReply(req, res) {
 
   if (!listingRow) return res.status(404).json({ error: 'Not Found' });
 
-  const meta = db
+  const meta = await db
     .prepare(
       `SELECT r.id,
               r.user_id AS userId
@@ -1404,7 +1406,7 @@ function deletePublicListingReply(req, res) {
   if (String(meta.userId) !== String(userId))
     return res.status(403).json({ error: 'Forbidden' });
 
-  db.prepare(
+  await db.prepare(
     `DELETE FROM listing_question_replies
       WHERE id = ?
         AND question_id = ?`,
@@ -1413,11 +1415,11 @@ function deletePublicListingReply(req, res) {
   return res.json({ ok: true });
 }
 
-function listMyListings(req, res) {
+async function listMyListings(req, res) {
   const sellerId = req.user?.id;
   if (!sellerId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               title,
@@ -1451,14 +1453,14 @@ function listMyListings(req, res) {
   return res.json({ listings });
 }
 
-function getMyListing(req, res) {
+async function getMyListing(req, res) {
   const sellerId = req.user?.id;
   if (!sellerId) return res.status(401).json({ error: 'Not authenticated' });
 
   const id = req.params?.id;
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const row = getListingById(id);
+  const row = await getListingById(id);
   if (!row) return res.status(404).json({ error: 'Not Found' });
   if (row.sellerId !== sellerId)
     return res.status(403).json({ error: 'Not authorized' });
@@ -1466,11 +1468,11 @@ function getMyListing(req, res) {
   return res.json({ listing: rowToMyListing(row) });
 }
 
-function getLatestDraft(req, res) {
+async function getLatestDraft(req, res) {
   const sellerId = req.user?.id;
   if (!sellerId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id
          FROM listings
@@ -1483,7 +1485,7 @@ function getLatestDraft(req, res) {
 
   if (!row?.id) return res.json({ draft: null });
 
-  const listingRow = getListingById(row.id);
+  const listingRow = await getListingById(row.id);
   if (!listingRow) return res.json({ draft: null });
   if (listingRow.sellerId !== sellerId)
     return res.status(403).json({ error: 'Not authorized' });
@@ -1503,7 +1505,7 @@ async function updateListing(req, res) {
   const id = req.params?.id;
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const existing = getListingById(id);
+  const existing = await getListingById(id);
   if (!existing) return res.status(404).json({ error: 'Not Found' });
   if (existing.sellerId !== sellerId)
     return res.status(403).json({ error: 'Not authorized' });
@@ -1581,7 +1583,7 @@ async function updateListing(req, res) {
 
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `UPDATE listings
      SET status = ?,
          title = ?,
@@ -1628,7 +1630,7 @@ async function deleteListing(req, res) {
   const id = req.params?.id;
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const existing = getListingById(id);
+  const existing = await getListingById(id);
   if (!existing) return res.status(404).json({ error: 'Not Found' });
   if (existing.sellerId !== sellerId)
     return res.status(403).json({ error: 'Not authorized' });
@@ -1647,7 +1649,7 @@ async function deleteListing(req, res) {
       ),
   );
 
-  db.prepare('DELETE FROM listings WHERE id = ?').run(id);
+  await db.prepare('DELETE FROM listings WHERE id = ?').run(id);
 
   return res.json({ ok: true });
 }

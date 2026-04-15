@@ -15,7 +15,7 @@ function toDashboardStatus(listingStatus) {
   return 'Disabled';
 }
 
-function listDashboardListings(req, res) {
+async function listDashboardListings(req, res) {
   const qRaw = typeof req.query?.q === 'string' ? req.query.q : '';
   const q = qRaw.trim().toLowerCase();
 
@@ -61,7 +61,7 @@ function listDashboardListings(req, res) {
     args = [like, like, statusLike];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM listings l
@@ -72,7 +72,7 @@ function listDashboardListings(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT l.id,
               l.title,
@@ -98,11 +98,11 @@ function listDashboardListings(req, res) {
   return res.json({ listings, total, page, limit });
 }
 
-function disableDashboardListing(req, res) {
+async function disableDashboardListing(req, res) {
   const id = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const row = db
+  const row = await db
     .prepare(`SELECT id, status FROM listings WHERE id = ? LIMIT 1`)
     .get(id);
 
@@ -121,15 +121,15 @@ function disableDashboardListing(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.transaction(() => {
-    db.prepare(
+  await db.transaction(async () => {
+    await db.prepare(
       `UPDATE listings
           SET status = 'disabled', updated_at = ?
         WHERE id = ? AND status = 'active'`,
     ).run(now, id);
 
     // Close any open checkout locks for safety.
-    db.prepare(
+    await db.prepare(
       `UPDATE checkout_intents
           SET status = 'closed', updated_at = ?
         WHERE listing_id = ? AND status = 'open'`,
@@ -139,11 +139,11 @@ function disableDashboardListing(req, res) {
   return res.json({ ok: true });
 }
 
-function enableDashboardListing(req, res) {
+async function enableDashboardListing(req, res) {
   const id = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const row = db
+  const row = await db
     .prepare(`SELECT id, status FROM listings WHERE id = ? LIMIT 1`)
     .get(id);
 
@@ -162,7 +162,7 @@ function enableDashboardListing(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
+  await db.prepare(
     `UPDATE listings
         SET status = 'active', updated_at = ?
       WHERE id = ? AND status = 'disabled'`,
@@ -175,7 +175,7 @@ async function deleteDashboardListing(req, res) {
   const id = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'Listing id is required' });
 
-  const row = db
+  const row = await db
     .prepare(`SELECT id, status FROM listings WHERE id = ? LIMIT 1`)
     .get(id);
 
@@ -202,14 +202,14 @@ async function deleteDashboardListing(req, res) {
   }
 
   const now = new Date().toISOString();
-  db.transaction(() => {
-    db.prepare(
+  await db.transaction(async () => {
+    await db.prepare(
       `UPDATE checkout_intents
           SET status = 'closed', updated_at = ?
         WHERE listing_id = ? AND status = 'open'`,
     ).run(now, id);
 
-    db.prepare(`DELETE FROM listings WHERE id = ?`).run(id);
+    await db.prepare(`DELETE FROM listings WHERE id = ?`).run(id);
   })();
 
   return res.json({ ok: true });

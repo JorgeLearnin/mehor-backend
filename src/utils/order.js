@@ -76,11 +76,11 @@ function computeOrderTotals({ listingPriceUsd, selectedAddOnIds, addOnsJson }) {
   };
 }
 
-function generateUniqueOrderNumber() {
+async function generateUniqueOrderNumber() {
   for (let attempt = 0; attempt < 10; attempt++) {
     const n = crypto.randomInt(0, 100_000_000);
     const orderNumber = String(n).padStart(8, '0');
-    const exists = db
+    const exists = await db
       .prepare(`SELECT 1 FROM orders WHERE order_number = ? LIMIT 1`)
       .get(orderNumber);
     if (!exists) return orderNumber;
@@ -127,11 +127,11 @@ function computeSelectedAddOnsTotalDays(selectedAddOns) {
   return Math.max(0, Math.min(365, total));
 }
 
-function completeExpiredReviewOrders({ nowIso } = {}) {
+async function completeExpiredReviewOrders({ nowIso } = {}) {
   const now = String(nowIso || new Date().toISOString()).trim();
   if (!now) return { completedCount: 0 };
 
-  const due = db
+  const due = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -146,7 +146,7 @@ function completeExpiredReviewOrders({ nowIso } = {}) {
 
   if (!due.length) return { completedCount: 0 };
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const row of due) {
       const orderId = String(row.id || '').trim();
       const listingId = String(row.listingId || '').trim();
@@ -160,7 +160,7 @@ function completeExpiredReviewOrders({ nowIso } = {}) {
         const addonsDueAt = totalAddOnDays
           ? addDaysToIso(now, totalAddOnDays)
           : null;
-        db.prepare(
+        await db.prepare(
           `UPDATE orders
               SET status = 'addons',
                   addons_started_at = COALESCE(addons_started_at, ?),
@@ -172,7 +172,7 @@ function completeExpiredReviewOrders({ nowIso } = {}) {
         continue;
       }
 
-      db.prepare(
+      await db.prepare(
         `UPDATE orders
             SET status = 'completed',
                 finalized_reason = COALESCE(finalized_reason, 'auto_review_ended'),
@@ -181,7 +181,7 @@ function completeExpiredReviewOrders({ nowIso } = {}) {
           WHERE id = ? AND status = 'delivered'`,
       ).run(now, now, orderId);
 
-      db.prepare(
+      await db.prepare(
         `UPDATE listings
             SET status = 'sold', updated_at = ?
           WHERE id = ? AND status = 'in_progress'`,

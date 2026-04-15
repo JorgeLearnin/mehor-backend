@@ -3,7 +3,7 @@
 const { db } = require('../db/db');
 const { getPaginationParams, escapeLike } = require('../utils/pagination');
 
-function listDashboardUsers(req, res) {
+async function listDashboardUsers(req, res) {
   const qRaw = typeof req.query?.q === 'string' ? req.query.q : '';
   const q = qRaw.trim().toLowerCase();
 
@@ -30,7 +30,7 @@ function listDashboardUsers(req, res) {
     args = [like, like, like, like, like, like];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM users u
@@ -40,7 +40,7 @@ function listDashboardUsers(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT u.id,
               u.name,
@@ -76,14 +76,14 @@ function listDashboardUsers(req, res) {
   return res.json({ users, total, page, limit });
 }
 
-function restrictDashboardUser(req, res) {
+async function restrictDashboardUser(req, res) {
   const id = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'User id is required' });
 
-  const row = db.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).get(id);
+  const row = await db.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).get(id);
   if (!row) return res.status(404).json({ error: 'Not Found' });
 
-  db.prepare(
+  await db.prepare(
     `UPDATE users
         SET is_restricted = 1
       WHERE id = ?`,
@@ -92,14 +92,14 @@ function restrictDashboardUser(req, res) {
   return res.json({ ok: true });
 }
 
-function unrestrictDashboardUser(req, res) {
+async function unrestrictDashboardUser(req, res) {
   const id = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'User id is required' });
 
-  const row = db.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).get(id);
+  const row = await db.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).get(id);
   if (!row) return res.status(404).json({ error: 'Not Found' });
 
-  db.prepare(
+  await db.prepare(
     `UPDATE users
         SET is_restricted = 0
       WHERE id = ?`,

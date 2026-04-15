@@ -37,7 +37,7 @@ function clearDashboardSessionCookie(res) {
   });
 }
 
-function login(req, res) {
+async function login(req, res) {
   const { email, password, remember } = req.body || {};
   const resolvedEmail = String(email ?? '').trim();
 
@@ -45,7 +45,7 @@ function login(req, res) {
     return res.status(400).json({ error: 'Email and password required' });
   }
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id, email, password_hash, role, status
          FROM dashboard_users
@@ -72,7 +72,7 @@ function login(req, res) {
 
   const now = new Date().toISOString();
   try {
-    db.prepare(
+    await db.prepare(
       `UPDATE dashboard_users SET last_login_at = ?, updated_at = ? WHERE id = ?`,
     ).run(now, now, user.id);
   } catch {
@@ -87,7 +87,7 @@ function logout(req, res) {
   return res.json({ ok: true });
 }
 
-function me(req, res) {
+async function me(req, res) {
   const token = req.cookies?.[DASHBOARD_COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -102,7 +102,7 @@ function me(req, res) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id, email, role, status, created_at AS createdAt, last_login_at AS lastLoginAt
          FROM dashboard_users

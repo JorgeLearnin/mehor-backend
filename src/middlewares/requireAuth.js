@@ -3,7 +3,7 @@
 const { db } = require('../db/db');
 const { verifySession } = require('../utils/jwt');
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   try {
     const name = process.env.COOKIE_NAME || 'mehor_session';
     const token = req.cookies?.[name];
@@ -13,7 +13,7 @@ function requireAuth(req, res, next) {
     const userId = payload?.id ? String(payload.id).trim() : '';
     if (!userId) return res.status(401).json({ error: 'Invalid session' });
 
-    const userRow = db
+    const userRow = await db
       .prepare(
         `SELECT id, is_restricted AS isRestricted FROM users WHERE id = ? LIMIT 1`,
       )

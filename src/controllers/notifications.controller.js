@@ -60,7 +60,7 @@ function toInt(value, { min = 1, max = 200 } = {}) {
   return n;
 }
 
-function listNotifications(req, res) {
+async function listNotifications(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -70,7 +70,7 @@ function listNotifications(req, res) {
   const limit = toInt(req.query?.limit, { min: 1, max: 50 }) || 12;
   const offset = (page - 1) * limit;
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(*) AS total
          FROM notifications
@@ -80,7 +80,7 @@ function listNotifications(req, res) {
     .get(userId, ...allowedTypes);
   const total = Number(totalRow?.total ?? 0);
 
-  const unreadRow = db
+  const unreadRow = await db
     .prepare(
       `SELECT COUNT(*) AS total
          FROM notifications
@@ -91,7 +91,7 @@ function listNotifications(req, res) {
     .get(userId, ...allowedTypes);
   const unreadCount = Number(unreadRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               type,
@@ -143,7 +143,7 @@ function listNotifications(req, res) {
   });
 }
 
-function markNotificationRead(req, res) {
+async function markNotificationRead(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -153,7 +153,7 @@ function markNotificationRead(req, res) {
 
   const now = new Date().toISOString();
 
-  const result = db
+  const result = await db
     .prepare(
       `UPDATE notifications
           SET read_at = COALESCE(read_at, ?)
@@ -166,12 +166,12 @@ function markNotificationRead(req, res) {
   return res.json({ ok: true });
 }
 
-function markAllRead(req, res) {
+async function markAllRead(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   const now = new Date().toISOString();
-  db.prepare(
+  await db.prepare(
     `UPDATE notifications
         SET read_at = COALESCE(read_at, ?)
       WHERE user_id = ?`,
@@ -180,24 +180,26 @@ function markAllRead(req, res) {
   return res.json({ ok: true });
 }
 
-function deleteAll(req, res) {
+async function deleteAll(req, res) {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  db.prepare(`DELETE FROM notifications WHERE user_id = ?`).run(userId);
+  await db.prepare(`DELETE FROM notifications WHERE user_id = ?`).run(userId);
   return res.json({ ok: true });
 }
 
 // Internal helper (used by other controllers)
-function createNotification({
-  userId,
-  type,
-  title,
-  detail,
-  entityType = null,
-  entityId = null,
-  data = null,
-}) {
+async function createNotification(
+  {
+    userId,
+    type,
+    title,
+    detail,
+    entityType = null,
+    entityId = null,
+    data = null,
+  },
+) {
   const resolvedUserId = String(userId ?? '').trim();
   if (!resolvedUserId) return null;
 
@@ -211,7 +213,7 @@ function createNotification({
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO notifications
         (id, user_id, type, title, detail, entity_type, entity_id, data_json, read_at, created_at)
      VALUES
@@ -234,15 +236,17 @@ function createNotification({
 // Internal helper (used by other controllers)
 // Coalesces duplicates: if an unread notification already exists for the same
 // (user,type,entityType,entityId), update it and bump created_at.
-function upsertUnreadNotification({
-  userId,
-  type,
-  title,
-  detail,
-  entityType = null,
-  entityId = null,
-  data = null,
-}) {
+async function upsertUnreadNotification(
+  {
+    userId,
+    type,
+    title,
+    detail,
+    entityType = null,
+    entityId = null,
+    data = null,
+  },
+) {
   const resolvedUserId = String(userId ?? '').trim();
   if (!resolvedUserId) return null;
 
@@ -257,7 +261,7 @@ function upsertUnreadNotification({
   const resolvedEntityId = entityId ? String(entityId) : null;
   const now = new Date().toISOString();
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id
          FROM notifications
@@ -272,7 +276,7 @@ function upsertUnreadNotification({
     .get(resolvedUserId, resolvedType, resolvedEntityType, resolvedEntityId);
 
   if (existing?.id) {
-    db.prepare(
+    await db.prepare(
       `UPDATE notifications
           SET title = ?,
               detail = ?,
@@ -292,7 +296,7 @@ function upsertUnreadNotification({
   }
 
   const id = crypto.randomUUID();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO notifications
         (id, user_id, type, title, detail, entity_type, entity_id, data_json, read_at, created_at)
      VALUES

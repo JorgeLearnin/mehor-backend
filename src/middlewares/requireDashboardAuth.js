@@ -6,7 +6,7 @@ const { verifySession } = require('../utils/jwt');
 const DASHBOARD_COOKIE_NAME =
   process.env.DASHBOARD_COOKIE_NAME || 'mehor_admin_session';
 
-function requireDashboardAuth(req, res, next) {
+async function requireDashboardAuth(req, res, next) {
   const token = req.cookies?.[DASHBOARD_COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -21,7 +21,7 @@ function requireDashboardAuth(req, res, next) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id, email, role, status
          FROM dashboard_users

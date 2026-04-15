@@ -71,16 +71,18 @@ function getAttachmentFormat({ attachmentName, url }) {
   return '';
 }
 
-function ensureDisputeThread({
-  orderId,
-  listingId,
-  buyerId,
-  sellerId,
-  stage,
-  now,
-}) {
+async function ensureDisputeThread(
+  {
+    orderId,
+    listingId,
+    buyerId,
+    sellerId,
+    stage,
+    now,
+  },
+) {
   const disputeStage = normalizeDisputeStage(stage);
-  let threadRow = db
+  let threadRow = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -94,7 +96,7 @@ function ensureDisputeThread({
   if (threadRow?.id) return String(threadRow.id);
 
   const newThreadId = crypto.randomUUID();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_threads (
           id,
           listing_id,
@@ -122,9 +124,9 @@ function ensureDisputeThread({
   return newThreadId;
 }
 
-function insertSupportThreadMessage({ threadId, body, now }) {
+async function insertSupportThreadMessage({ threadId, body, now }) {
   const messageId = crypto.randomUUID();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_messages (
         id,
         thread_id,
@@ -136,7 +138,7 @@ function insertSupportThreadMessage({ threadId, body, now }) {
       ) VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
   ).run(messageId, threadId, SUPPORT_USER_ID, body, now);
 
-  db.prepare(
+  await db.prepare(
     `UPDATE message_threads
         SET updated_at = ?,
             last_message_at = ?,
@@ -183,20 +185,20 @@ async function createRefundSafe({ stripe, paymentIntentId, amountUsd }) {
   }
 }
 
-function ensureSupportUser() {
-  const existing = db
+async function ensureSupportUser() {
+  const existing = await db
     .prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`)
     .get(SUPPORT_USER_ID);
   if (existing?.id) return;
 
   const now = new Date().toISOString();
-  db.prepare(
+  await db.prepare(
     `INSERT INTO users (id, email, password_hash, provider, provider_id, name, username, display_name, avatar_url, created_at)
      VALUES (?, NULL, NULL, 'system', NULL, 'Mehor Support', 'mehor-support', 'Mehor Support', NULL, ?)`,
   ).run(SUPPORT_USER_ID, now);
 }
 
-function listDashboardDisputes(req, res) {
+async function listDashboardDisputes(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -228,7 +230,7 @@ function listDashboardDisputes(req, res) {
     args = [like, like, like, like, like, like, like, like];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM orders o
@@ -241,7 +243,7 @@ function listDashboardDisputes(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id AS orderId,
               o.order_number AS orderNumber,
@@ -365,7 +367,7 @@ function listDashboardDisputes(req, res) {
   return res.json({ disputes, total, page, limit });
 }
 
-function listDashboardDisputeMessages(req, res) {
+async function listDashboardDisputeMessages(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -374,7 +376,7 @@ function listDashboardDisputeMessages(req, res) {
   if (!orderId) return res.status(400).json({ error: 'Order id is required' });
   const disputeStage = normalizeDisputeStage(req.query?.stage);
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId
@@ -386,7 +388,7 @@ function listDashboardDisputeMessages(req, res) {
 
   if (!orderRow?.id) return res.status(404).json({ error: 'Not Found' });
 
-  const disputeRow = db
+  const disputeRow = await db
     .prepare(
       `SELECT opened_at AS openedAt,
               message
@@ -403,7 +405,7 @@ function listDashboardDisputeMessages(req, res) {
     return res.status(404).json({ error: 'Dispute discussion not found' });
   }
 
-  const threadRow = db
+  const threadRow = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -428,7 +430,7 @@ function listDashboardDisputeMessages(req, res) {
   const threadId = threadRow?.id ? String(threadRow.id) : null;
 
   const threadMessages = threadId
-    ? db
+    ? (await db
         .prepare(
           `SELECT m.id,
                   m.sender_id AS senderId,
@@ -442,7 +444,7 @@ function listDashboardDisputeMessages(req, res) {
             ORDER BY m.created_at ASC
             LIMIT 500`,
         )
-        .all(threadId)
+        .all(threadId))
         .map((m) => ({
           id: String(m.id),
           senderId: String(m.senderId),
@@ -486,7 +488,7 @@ async function downloadDashboardDisputeAttachment(req, res) {
     return res.status(400).json({ error: 'Message id is required' });
 
   const disputeStage = normalizeDisputeStage(req.query?.stage);
-  const threadRow = db
+  const threadRow = await db
     .prepare(
       `SELECT id
          FROM message_threads
@@ -501,7 +503,7 @@ async function downloadDashboardDisputeAttachment(req, res) {
     return res.status(404).json({ error: 'Attachment not found' });
   }
 
-  const messageRow = db
+  const messageRow = await db
     .prepare(
       `SELECT image_url AS imageUrl,
               image_public_id AS imagePublicId,
@@ -583,7 +585,7 @@ async function downloadDashboardDisputeAttachment(req, res) {
   }
 }
 
-function createDashboardDisputeImageUploadSignature(req, res) {
+async function createDashboardDisputeImageUploadSignature(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -596,7 +598,7 @@ function createDashboardDisputeImageUploadSignature(req, res) {
     .toLowerCase();
   const attachmentKind = kindRaw === 'pdf' ? 'pdf' : 'image';
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -610,7 +612,7 @@ function createDashboardDisputeImageUploadSignature(req, res) {
     .get(orderId);
 
   if (!orderRow?.id) return res.status(404).json({ error: 'Not Found' });
-  const openDispute = db
+  const openDispute = await db
     .prepare(
       `SELECT id
          FROM order_disputes
@@ -629,7 +631,7 @@ function createDashboardDisputeImageUploadSignature(req, res) {
   }
 
   const now = new Date().toISOString();
-  const threadId = ensureDisputeThread({
+  const threadId = await ensureDisputeThread({
     orderId,
     listingId: orderRow.listingId,
     buyerId: orderRow.buyerId,
@@ -706,7 +708,7 @@ async function sendDashboardDisputeMessage(req, res) {
     return res.status(400).json({ error: 'Attachment name is too long' });
   }
 
-  const orderRow = db
+  const orderRow = await db
     .prepare(
       `SELECT id,
               listing_id AS listingId,
@@ -720,7 +722,7 @@ async function sendDashboardDisputeMessage(req, res) {
     .get(orderId);
 
   if (!orderRow?.id) return res.status(404).json({ error: 'Not Found' });
-  const openDispute = db
+  const openDispute = await db
     .prepare(
       `SELECT id
          FROM order_disputes
@@ -738,11 +740,11 @@ async function sendDashboardDisputeMessage(req, res) {
       .json({ error: 'Dispute is not opened for this order' });
   }
 
-  ensureSupportUser();
+  await ensureSupportUser();
 
   const now = new Date().toISOString();
 
-  const threadId = ensureDisputeThread({
+  const threadId = await ensureDisputeThread({
     orderId,
     listingId: orderRow.listingId,
     buyerId: orderRow.buyerId,
@@ -762,7 +764,7 @@ async function sendDashboardDisputeMessage(req, res) {
     }
   }
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO message_thread_messages (
         id,
         thread_id,
@@ -784,7 +786,7 @@ async function sendDashboardDisputeMessage(req, res) {
     now,
   );
 
-  db.prepare(
+  await db.prepare(
     `UPDATE message_threads
         SET updated_at = ?,
             last_message_at = ?,
@@ -857,7 +859,7 @@ async function resolveDashboardDispute(req, res) {
       .json({ error: "action must be 'approve', 'cancel', or 'part_refund'" });
   }
 
-  const order = db
+  const order = await db
     .prepare(
       `SELECT id,
               status,
@@ -975,13 +977,13 @@ async function resolveDashboardDispute(req, res) {
     }
   }
 
-  ensureSupportUser();
+  await ensureSupportUser();
 
   try {
-    db.transaction(() => {
+    await db.transaction(async () => {
       // Resolve stage-specific dispute history row (best-effort; older DBs may not have table).
       try {
-        db.prepare(
+        await db.prepare(
           `UPDATE order_disputes
               SET resolved_at = COALESCE(resolved_at, ?),
                   updated_at = ?
@@ -993,7 +995,7 @@ async function resolveDashboardDispute(req, res) {
         // ignore
       }
 
-      db.prepare(
+      await db.prepare(
         `UPDATE orders
             SET refunded_subtotal_usd = ?,
                 refunded_usd = ?,
@@ -1014,7 +1016,7 @@ async function resolveDashboardDispute(req, res) {
         orderId,
       );
 
-      const threadId = ensureDisputeThread({
+      const threadId = await ensureDisputeThread({
         orderId,
         listingId: order.listingId,
         buyerId: order.buyerId,
@@ -1029,7 +1031,7 @@ async function resolveDashboardDispute(req, res) {
             ? 'Canceled order'
             : 'Partial refund';
       const body = `${actionLine}\n${reasonRaw}`;
-      insertSupportThreadMessage({ threadId, body, now });
+      await insertSupportThreadMessage({ threadId, body, now });
     })();
 
     return res.json({

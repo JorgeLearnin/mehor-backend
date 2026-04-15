@@ -60,7 +60,7 @@ async function closeCheckoutIntent({
   const checkoutId = String(checkoutIntentId ?? '').trim();
   if (!checkoutId) return;
 
-  db.prepare(
+  await db.prepare(
     `UPDATE checkout_intents
         SET status = 'closed', updated_at = ?
       WHERE id = ? AND status = 'open'`,
@@ -89,7 +89,7 @@ async function closeCheckoutIntent({
 }
 
 async function getOrCreateStripeCustomerId({ stripe, userId }) {
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id, email, stripe_customer_id AS stripeCustomerId
          FROM users
@@ -108,7 +108,7 @@ async function getOrCreateStripeCustomerId({ stripe, userId }) {
   });
 
   stripeCustomerId = customer.id;
-  db.prepare(`UPDATE users SET stripe_customer_id = ? WHERE id = ?`).run(
+  await db.prepare(`UPDATE users SET stripe_customer_id = ? WHERE id = ?`).run(
     stripeCustomerId,
     userId,
   );
@@ -129,7 +129,7 @@ async function createPaymentIntent(req, res) {
     ? req.body.selectedAddOns
     : [];
 
-  const listing = db
+  const listing = await db
     .prepare(
       `SELECT id,
               seller_id AS sellerId,
@@ -168,14 +168,14 @@ async function createPaymentIntent(req, res) {
   const selectedAddOnsJson = serializeSelectedAddOns(totals.selectedAddOns);
 
   // Clean up expired open locks for this listing.
-  db.prepare(
+  await db.prepare(
     `DELETE FROM checkout_intents
       WHERE listing_id = ?
         AND status = 'open'
         AND expires_at < ?`,
   ).run(listingId, now);
 
-  const existingOpen = db
+  const existingOpen = await db
     .prepare(
       `SELECT id,
               buyer_id AS buyerId,
@@ -236,7 +236,7 @@ async function createPaymentIntent(req, res) {
           isReusablePaymentIntentStatus(status) &&
           existingPaymentIntent?.client_secret
         ) {
-          db.prepare(
+          await db.prepare(
             `UPDATE checkout_intents
                 SET expires_at = ?, updated_at = ?
               WHERE id = ?`,
@@ -268,7 +268,7 @@ async function createPaymentIntent(req, res) {
     : require('crypto').randomUUID();
 
   try {
-    db.prepare(
+    await db.prepare(
       `INSERT INTO checkout_intents (
         id,
         stripe_payment_intent_id,
@@ -329,7 +329,7 @@ async function createPaymentIntent(req, res) {
         : 'Mehor order',
     });
   } catch (e) {
-    db.prepare(
+    await db.prepare(
       `UPDATE checkout_intents
           SET status = 'closed', updated_at = ?
         WHERE id = ?`,
@@ -337,7 +337,7 @@ async function createPaymentIntent(req, res) {
     throw e;
   }
 
-  db.prepare(
+  await db.prepare(
     `UPDATE checkout_intents
         SET stripe_payment_intent_id = ?, updated_at = ?
       WHERE id = ?`,
@@ -358,7 +358,7 @@ async function createSellerOnboardingLink(req, res) {
 
   const userId = req.user.id;
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id, email, stripe_account_id AS stripeAccountId
          FROM users
@@ -382,7 +382,7 @@ async function createSellerOnboardingLink(req, res) {
     });
 
     stripeAccountId = acct.id;
-    db.prepare(`UPDATE users SET stripe_account_id = ? WHERE id = ?`).run(
+    await db.prepare(`UPDATE users SET stripe_account_id = ? WHERE id = ?`).run(
       stripeAccountId,
       userId,
     );

@@ -2,11 +2,11 @@
 
 const { db } = require('../db/db');
 
-function requireSeller(req, res, next) {
+async function requireSeller(req, res, next) {
   const id = req.user?.id;
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
-  const row = db
+  const row = await db
     .prepare(`SELECT is_seller AS isSeller FROM users WHERE id = ?`)
     .get(id);
 

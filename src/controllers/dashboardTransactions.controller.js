@@ -11,7 +11,7 @@ function clampNumber(n, { min = 0, max = 1_000_000_000 } = {}) {
   return v;
 }
 
-function listDashboardTransactions(req, res) {
+async function listDashboardTransactions(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -50,7 +50,7 @@ function listDashboardTransactions(req, res) {
     args = [like, like, like, like, like, like, like, like, like];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM orders o
@@ -63,7 +63,7 @@ function listDashboardTransactions(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id AS orderId,
               o.order_number AS orderNumber,

@@ -30,7 +30,7 @@ function isPasswordStrong(password) {
   return true;
 }
 
-function register(req, res) {
+async function register(req, res) {
   const { email, password, fullName, username } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'Email and password required' });
@@ -45,12 +45,12 @@ function register(req, res) {
       ? fullName.trim()
       : resolvedUsername;
 
-  const existing = db
+  const existing = await db
     .prepare(`SELECT id FROM users WHERE email = ?`)
     .get(email);
   if (existing) return res.status(409).json({ error: 'Email already in use' });
 
-  const existingUsername = db
+  const existingUsername = await db
     .prepare(
       `SELECT id FROM users
        WHERE username IS NOT NULL AND LOWER(username) = LOWER(?)`,
@@ -63,7 +63,7 @@ function register(req, res) {
   const createdAt = new Date().toISOString();
   const passwordHash = bcrypt.hashSync(password, 10);
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO users (id, email, password_hash, provider, provider_id, name, username, display_name, avatar_url, created_at)
      VALUES (?, ?, ?, 'local', NULL, ?, ?, ?, NULL, ?)`,
   ).run(
@@ -78,7 +78,7 @@ function register(req, res) {
   return res.json({ ok: true });
 }
 
-function lookupUsernamesPublic(req, res) {
+async function lookupUsernamesPublic(req, res) {
   const raw = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
   const usernames = raw
     .map((u) => String(u ?? '').trim())
@@ -90,7 +90,7 @@ function lookupUsernamesPublic(req, res) {
   const lowered = Array.from(new Set(usernames.map((u) => u.toLowerCase())));
   const placeholders = lowered.map(() => '?').join(',');
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT username
          FROM users
@@ -107,12 +107,12 @@ function lookupUsernamesPublic(req, res) {
   return res.json({ usernames: existing });
 }
 
-function login(req, res) {
+async function login(req, res) {
   const { email, password, remember } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'Email and password required' });
 
-  const user = db
+  const user = await db
     .prepare(`SELECT * FROM users WHERE email = ? AND provider='local'`)
     .get(email);
   if (!user?.password_hash)
@@ -141,11 +141,11 @@ function login(req, res) {
   return res.json({ ok: true });
 }
 
-function me(req, res) {
+async function me(req, res) {
   const id = req.user?.id;
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT id,
               email,
@@ -244,7 +244,7 @@ async function updateProfile(req, res) {
     return res.status(400).json({ error: 'Invalid avatar URL' });
   }
 
-  db.prepare(
+  await db.prepare(
     `UPDATE users
      SET location = CASE WHEN ? = 1 THEN ? ELSE location END,
          bio = CASE WHEN ? = 1 THEN ? ELSE bio END,
@@ -260,7 +260,7 @@ async function updateProfile(req, res) {
     id,
   );
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT avatar_url AS avatarUrl,
               location,
@@ -273,7 +273,7 @@ async function updateProfile(req, res) {
   return res.json({ ok: true, user });
 }
 
-function updateFullName(req, res) {
+async function updateFullName(req, res) {
   const id = req.user?.id;
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -289,7 +289,7 @@ function updateFullName(req, res) {
     return res.status(400).json({ error: 'Full name is too long' });
   }
 
-  db.prepare(`UPDATE users SET display_name = ? WHERE id = ?`).run(
+  await db.prepare(`UPDATE users SET display_name = ? WHERE id = ?`).run(
     resolvedFullName,
     id,
   );
@@ -297,7 +297,7 @@ function updateFullName(req, res) {
   return res.json({ ok: true });
 }
 
-function changePassword(req, res) {
+async function changePassword(req, res) {
   const id = req.user?.id;
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -321,7 +321,7 @@ function changePassword(req, res) {
       .json({ error: 'New password must be different from current password' });
   }
 
-  const user = db
+  const user = await db
     .prepare(
       `SELECT password_hash AS passwordHash
        FROM users
@@ -338,13 +338,13 @@ function changePassword(req, res) {
     return res.status(401).json({ error: 'Current password is incorrect' });
 
   const passwordHash = bcrypt.hashSync(newPassword, 10);
-  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
+  await db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
     passwordHash,
     id,
   );
 
   // Invalidate any outstanding reset links for this user.
-  db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
+  await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
 
   return res.json({ ok: true });
 }
@@ -359,16 +359,16 @@ async function deleteAccount(req, res) {
   try {
     await deleteAvatarByUserId({ userId: id });
 
-    const listingIds = db
+    const listingIds = (await db
       .prepare(`SELECT id FROM listings WHERE seller_id = ?`)
-      .all(id)
+      .all(id))
       .map((r) => String(r.id));
 
-    const threadIds = db
+    const threadIds = (await db
       .prepare(
         `SELECT id FROM message_threads WHERE buyer_id = ? OR seller_id = ?`,
       )
-      .all(id, id)
+      .all(id, id))
       .map((r) => String(r.id));
 
     await Promise.all([
@@ -395,13 +395,13 @@ async function deleteAccount(req, res) {
     }
   }
 
-  const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
-    db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
+  const tx = db.transaction(async () => {
+    await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
+    await db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
   });
 
   try {
-    tx();
+    await tx();
     clearSessionCookie(res);
     return res.json({ ok: true });
   } catch (e) {
@@ -416,11 +416,11 @@ function logout(req, res) {
   return res.json({ ok: true });
 }
 
-function activateSeller(req, res) {
+async function activateSeller(req, res) {
   const id = req.user?.id;
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
-  db.prepare(`UPDATE users SET is_seller = 1 WHERE id = ?`).run(id);
+  await db.prepare(`UPDATE users SET is_seller = 1 WHERE id = ?`).run(id);
   return res.json({ ok: true });
 }
 
@@ -431,7 +431,7 @@ async function forgotPassword(req, res) {
 
   // Always respond with ok to avoid user enumeration.
   try {
-    const user = db
+    const user = await db
       .prepare(
         `SELECT id, email FROM users WHERE email = ? AND provider='local'`,
       )
@@ -443,11 +443,11 @@ async function forgotPassword(req, res) {
       const tokenHash = sha256Hex(token);
       const expiresAt = now + RESET_TOKEN_TTL_MS;
 
-      db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(
+      await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(
         user.id,
       );
 
-      db.prepare(
+      await db.prepare(
         `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
          VALUES (?, ?, ?, ?, NULL, ?)`,
       ).run(crypto.randomUUID(), user.id, tokenHash, expiresAt, now);
@@ -463,18 +463,18 @@ async function forgotPassword(req, res) {
   return res.json({ ok: true });
 }
 
-function resetPasswordStatus(req, res) {
+async function resetPasswordStatus(req, res) {
   const { token } = req.body || {};
   const trimmed = typeof token === 'string' ? token.trim() : '';
   if (!trimmed) return res.status(400).json({ error: 'Token is required' });
 
   const now = Date.now();
-  db.prepare(
+  await db.prepare(
     `DELETE FROM password_reset_tokens WHERE expires_at <= ? OR used_at IS NOT NULL`,
   ).run(now);
 
   const tokenHash = sha256Hex(trimmed);
-  const row = db
+  const row = await db
     .prepare(
       `SELECT expires_at AS expiresAt
        FROM password_reset_tokens
@@ -489,7 +489,7 @@ function resetPasswordStatus(req, res) {
   return res.json({ valid: true, expiresAt: row.expiresAt });
 }
 
-function resetPassword(req, res) {
+async function resetPassword(req, res) {
   const { token, password } = req.body || {};
   const trimmedToken = typeof token === 'string' ? token.trim() : '';
 
@@ -505,8 +505,8 @@ function resetPassword(req, res) {
   const now = Date.now();
   const tokenHash = sha256Hex(trimmedToken);
 
-  const tx = db.transaction(() => {
-    const row = db
+  const tx = db.transaction(async () => {
+    const row = await db
       .prepare(
         `SELECT id, user_id AS userId, expires_at AS expiresAt
          FROM password_reset_tokens
@@ -519,19 +519,19 @@ function resetPassword(req, res) {
     }
 
     const passwordHash = bcrypt.hashSync(password, 10);
-    db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
+    await db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
       passwordHash,
       row.userId,
     );
 
-    db.prepare(`UPDATE password_reset_tokens SET used_at = ? WHERE id = ?`).run(
+    await db.prepare(`UPDATE password_reset_tokens SET used_at = ? WHERE id = ?`).run(
       now,
       row.id,
     );
   });
 
   try {
-    tx();
+    await tx();
     return res.json({ ok: true });
   } catch (e) {
     if (e instanceof Error && e.message === 'RESET_TOKEN_INVALID') {

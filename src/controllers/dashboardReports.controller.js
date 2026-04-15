@@ -37,8 +37,8 @@ function formatTargetLabel(row) {
   return listingTitle || 'Report';
 }
 
-function getReportRow(id) {
-  return db
+async function getReportRow(id) {
+  return await db
     .prepare(
       `SELECT id,
               reporter_email AS reporterEmail,
@@ -61,7 +61,7 @@ function getReportRow(id) {
     .get(id);
 }
 
-function listDashboardReports(req, res) {
+async function listDashboardReports(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -92,7 +92,7 @@ function listDashboardReports(req, res) {
     args = [like, like, like, like, like, like, like, like];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM report_submissions
@@ -102,7 +102,7 @@ function listDashboardReports(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               reporter_email AS reporterEmail,
@@ -131,7 +131,7 @@ function listDashboardReports(req, res) {
   return res.json({ reports, total, page, limit });
 }
 
-function getDashboardReport(req, res) {
+async function getDashboardReport(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -139,7 +139,7 @@ function getDashboardReport(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Report id is required' });
 
-  const row = getReportRow(id);
+  const row = await getReportRow(id);
   if (!row?.id || row.removedAt)
     return res.status(404).json({ error: 'Not Found' });
 
@@ -164,7 +164,7 @@ function getDashboardReport(req, res) {
   });
 }
 
-function removeDashboardReport(req, res) {
+async function removeDashboardReport(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -173,7 +173,7 @@ function removeDashboardReport(req, res) {
   if (!id) return res.status(400).json({ error: 'Report id is required' });
 
   const now = new Date().toISOString();
-  const info = db
+  const info = await db
     .prepare(
       `UPDATE report_submissions
           SET removed_at = ?

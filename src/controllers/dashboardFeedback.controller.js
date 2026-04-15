@@ -3,7 +3,7 @@
 const { db } = require('../db/db');
 const { getPaginationParams, escapeLike } = require('../utils/pagination');
 
-function listDashboardFeedback(req, res) {
+async function listDashboardFeedback(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -29,7 +29,7 @@ function listDashboardFeedback(req, res) {
     args = [like, like, like];
   }
 
-  const totalRow = db
+  const totalRow = await db
     .prepare(
       `SELECT COUNT(1) AS total
          FROM feedback_submissions
@@ -39,7 +39,7 @@ function listDashboardFeedback(req, res) {
 
   const total = Number(totalRow?.total ?? 0);
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT id,
               subject,
@@ -62,7 +62,7 @@ function listDashboardFeedback(req, res) {
   return res.json({ feedback, total, page, limit });
 }
 
-function getDashboardFeedback(req, res) {
+async function getDashboardFeedback(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -70,7 +70,7 @@ function getDashboardFeedback(req, res) {
   const id = String(req.params?.id ?? '').trim();
   if (!id) return res.status(400).json({ error: 'Feedback id is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT id,
               subject,
@@ -103,7 +103,7 @@ function getDashboardFeedback(req, res) {
   });
 }
 
-function removeDashboardFeedback(req, res) {
+async function removeDashboardFeedback(req, res) {
   const dashboardUserId = String(req.dashboardUser?.id ?? '').trim();
   if (!dashboardUserId)
     return res.status(401).json({ error: 'Not authenticated' });
@@ -112,7 +112,7 @@ function removeDashboardFeedback(req, res) {
   if (!id) return res.status(400).json({ error: 'Feedback id is required' });
 
   const now = new Date().toISOString();
-  const info = db
+  const info = await db
     .prepare(
       `UPDATE feedback_submissions
           SET removed_at = ?

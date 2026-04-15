@@ -34,8 +34,8 @@ function listReportReasons(req, res) {
   return res.json({ options: REPORT_REASON_OPTIONS });
 }
 
-function resolveListingQuestionTarget(targetId, expectedThreadId) {
-  const row = db
+async function resolveListingQuestionTarget(targetId, expectedThreadId) {
+  const row = await db
     .prepare(
       `SELECT q.id AS targetId,
               q.id AS threadId,
@@ -60,8 +60,8 @@ function resolveListingQuestionTarget(targetId, expectedThreadId) {
   };
 }
 
-function resolveListingReplyTarget(targetId, expectedThreadId) {
-  const row = db
+async function resolveListingReplyTarget(targetId, expectedThreadId) {
+  const row = await db
     .prepare(
       `SELECT r.id AS targetId,
               q.id AS threadId,
@@ -87,8 +87,8 @@ function resolveListingReplyTarget(targetId, expectedThreadId) {
   };
 }
 
-function resolveMessageTarget(targetId, expectedThreadId, userId) {
-  const row = db
+async function resolveMessageTarget(targetId, expectedThreadId, userId) {
+  const row = await db
     .prepare(
       `SELECT m.id AS targetId,
               m.thread_id AS threadId,
@@ -119,7 +119,7 @@ function resolveMessageTarget(targetId, expectedThreadId, userId) {
   };
 }
 
-function submitReport(req, res) {
+async function submitReport(req, res) {
   const userId = toText(req.user?.id);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -149,7 +149,7 @@ function submitReport(req, res) {
     return res.status(400).json({ error: 'Report target is required' });
   }
 
-  const reporter = db
+  const reporter = await db
     .prepare(
       `SELECT id,
               email,
@@ -167,11 +167,11 @@ function submitReport(req, res) {
 
   let target = null;
   if (targetType === 'listing_question') {
-    target = resolveListingQuestionTarget(targetId, threadId);
+    target = await resolveListingQuestionTarget(targetId, threadId);
   } else if (targetType === 'listing_reply') {
-    target = resolveListingReplyTarget(targetId, threadId);
+    target = await resolveListingReplyTarget(targetId, threadId);
   } else if (targetType === 'message') {
-    target = resolveMessageTarget(targetId, threadId, userId);
+    target = await resolveMessageTarget(targetId, threadId, userId);
   }
 
   if (!target) {
@@ -181,7 +181,7 @@ function submitReport(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO report_submissions (
        id,
        reporter_user_id,

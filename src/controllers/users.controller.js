@@ -55,7 +55,7 @@ function toInt(value, { min = 1, max = 50 } = {}) {
   return n;
 }
 
-function listUsernames(req, res) {
+async function listUsernames(req, res) {
   const q = String(req.query?.q ?? '').trim();
   const limit = toInt(req.query?.limit, { min: 1, max: 20 }) || 8;
 
@@ -64,7 +64,7 @@ function listUsernames(req, res) {
 
   const qLower = q.toLowerCase();
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT username
          FROM users
@@ -82,7 +82,7 @@ function listUsernames(req, res) {
   return res.json({ usernames });
 }
 
-function lookupUsernames(req, res) {
+async function lookupUsernames(req, res) {
   const raw = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
   const usernames = raw
     .map((u) => String(u ?? '').trim())
@@ -94,7 +94,7 @@ function lookupUsernames(req, res) {
   const lowered = Array.from(new Set(usernames.map((u) => u.toLowerCase())));
   const placeholders = lowered.map(() => '?').join(',');
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT username
          FROM users
@@ -111,11 +111,11 @@ function lookupUsernames(req, res) {
   return res.json({ usernames: existing });
 }
 
-function listMySavedListings(req, res) {
+async function listMySavedListings(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT sl.listing_id AS id,
               sl.created_at AS savedAt,
@@ -170,7 +170,7 @@ function listMySavedListings(req, res) {
   return res.json({ savedListings });
 }
 
-function mySavedContains(req, res) {
+async function mySavedContains(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -178,7 +178,7 @@ function mySavedContains(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'listingId is required' });
 
-  const row = db
+  const row = await db
     .prepare(
       `SELECT 1 AS ok
          FROM saved_listings
@@ -190,7 +190,7 @@ function mySavedContains(req, res) {
   return res.json({ saved: !!row });
 }
 
-function toggleMySavedListing(req, res) {
+async function toggleMySavedListing(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -198,7 +198,7 @@ function toggleMySavedListing(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'listingId is required' });
 
-  const exists = db
+  const exists = await db
     .prepare(
       `SELECT 1 AS ok
          FROM listings
@@ -209,7 +209,7 @@ function toggleMySavedListing(req, res) {
     .get(listingId);
   if (!exists) return res.status(404).json({ error: 'Listing not found' });
 
-  const already = db
+  const already = await db
     .prepare(
       `SELECT 1 AS ok
          FROM saved_listings
@@ -219,13 +219,13 @@ function toggleMySavedListing(req, res) {
     .get(userId, listingId);
 
   if (already) {
-    db.prepare(
+    await db.prepare(
       `DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`,
     ).run(userId, listingId);
     return res.json({ saved: false });
   }
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO saved_listings (user_id, listing_id, created_at)
      VALUES (?, ?, ?)`,
   ).run(userId, listingId, new Date().toISOString());
@@ -233,7 +233,7 @@ function toggleMySavedListing(req, res) {
   return res.json({ saved: true });
 }
 
-function removeMySavedListing(req, res) {
+async function removeMySavedListing(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -241,7 +241,7 @@ function removeMySavedListing(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'listingId is required' });
 
-  db.prepare(
+  await db.prepare(
     `DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`,
   ).run(userId, listingId);
 
@@ -256,11 +256,11 @@ function toIntWithDefault(value, { min = 1, max = 200, fallback = 50 } = {}) {
   return n;
 }
 
-function listMyTransactions(req, res) {
+async function listMyTransactions(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
+  await completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
 
   const limit = toIntWithDefault(req.query?.limit, {
     min: 1,
@@ -268,7 +268,7 @@ function listMyTransactions(req, res) {
     fallback: 50,
   });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.listing_id AS listingId,
@@ -407,11 +407,11 @@ function listMyTransactions(req, res) {
   return res.json({ transactions });
 }
 
-function listMyOrders(req, res) {
+async function listMyOrders(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
+  await completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
 
   const limit = toIntWithDefault(req.query?.limit, {
     min: 1,
@@ -419,7 +419,7 @@ function listMyOrders(req, res) {
     fallback: 50,
   });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -485,11 +485,11 @@ function listMyOrders(req, res) {
   return res.json({ orders });
 }
 
-function listMySales(req, res) {
+async function listMySales(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
+  await completeExpiredReviewOrders({ nowIso: new Date().toISOString() });
 
   const limit = toIntWithDefault(req.query?.limit, {
     min: 1,
@@ -497,7 +497,7 @@ function listMySales(req, res) {
     fallback: 50,
   });
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -628,7 +628,7 @@ function toPublicOrderCode({ orderId, orderNumber }) {
   return id ? `MH-${id.slice(0, 8)}` : 'MH-—';
 }
 
-function getMyEarnings(req, res) {
+async function getMyEarnings(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
   if (!req.user?.isSeller)
@@ -636,7 +636,7 @@ function getMyEarnings(req, res) {
 
   // Only include orders that were actually purchased (i.e., payment happened).
   // `paid_at` is the purchase date and drives the earnings history.
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT o.id,
               o.order_number AS orderNumber,
@@ -734,7 +734,7 @@ async function withdrawMyEarnings(req, res) {
     return res.status(500).json({ error: 'Stripe not configured' });
   const stripe = new Stripe(stripeKey);
 
-  const accountRow = db
+  const accountRow = await db
     .prepare(
       `SELECT stripe_account_id AS stripeAccountId
          FROM users
@@ -772,7 +772,7 @@ async function withdrawMyEarnings(req, res) {
     });
   }
 
-  const eligible = db
+  const eligible = await db
     .prepare(
       `SELECT id,
               listing_price_usd AS listingPriceUsd,
@@ -856,7 +856,7 @@ async function withdrawMyEarnings(req, res) {
       update.run(now, item.netUsd, now, item.orderId, userId);
     }
   });
-  tx();
+  await tx();
 
   return res.json({ ok: true, paidOutCount: orderPayouts.length });
 }

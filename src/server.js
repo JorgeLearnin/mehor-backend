@@ -21,13 +21,16 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const { createApp } = require('./app');
+const {
+  initializeDatabase,
+  closeDatabase,
+  databaseDriver,
+} = require('./db/db');
 const { runOrderTimersTick } = require('./controllers/orders.controller');
 
 const port = Number.parseInt(process.env.PORT ?? '5000', 10);
 if (!Number.isFinite(port) || port <= 0)
   throw new Error('PORT must be a valid positive number');
-
-const app = createApp();
 
 // Background timer processing (best-effort):
 // - Auto-complete delivered orders whose review window ended
@@ -56,8 +59,25 @@ function startOrderTimers() {
   }, TIMER_INTERVAL_MS);
 }
 
-app.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Backend listening on http://localhost:${port}`);
-  startOrderTimers();
+async function startServer() {
+  await initializeDatabase();
+
+  const app = createApp();
+  app.listen(port, () => {
+    // eslint-disable-next-line no-console
+    console.log(
+      `Backend listening on http://localhost:${port} using ${databaseDriver}`,
+    );
+    startOrderTimers();
+  });
+}
+
+process.on('SIGINT', () => {
+  void closeDatabase();
 });
+
+process.on('SIGTERM', () => {
+  void closeDatabase();
+});
+
+void startServer();
