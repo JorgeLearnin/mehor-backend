@@ -1,5 +1,12 @@
 'use strict';
 
+function getCookieDomain() {
+  if (process.env.NODE_ENV !== 'production') return undefined;
+
+  const value = String(process.env.COOKIE_DOMAIN || '.mehor.com').trim();
+  return value || undefined;
+}
+
 function setSessionCookie(res, token, opts = {}) {
   const name = process.env.COOKIE_NAME || 'mehor_session';
   const remember = opts.remember !== false;
@@ -7,8 +14,9 @@ function setSessionCookie(res, token, opts = {}) {
 
   const options = {
     httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax',
     secure: isProd,
+    sameSite: 'lax',
+    domain: getCookieDomain(),
     path: '/',
   };
 
@@ -24,11 +32,11 @@ function setSessionCookie(res, token, opts = {}) {
 
 function clearSessionCookie(res) {
   const name = process.env.COOKIE_NAME || 'mehor_session';
-  const isProd = process.env.NODE_ENV === 'production';
   res.clearCookie(name, {
     path: '/',
-    sameSite: isProd ? 'none' : 'lax',
-    secure: isProd,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    domain: getCookieDomain(),
   });
 }
 

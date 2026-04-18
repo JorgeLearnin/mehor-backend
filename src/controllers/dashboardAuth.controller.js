@@ -7,14 +7,22 @@ const { signSession, verifySession } = require('../utils/jwt');
 const DASHBOARD_COOKIE_NAME =
   process.env.DASHBOARD_COOKIE_NAME || 'mehor_admin_session';
 
+function getDashboardCookieDomain() {
+  if (process.env.NODE_ENV !== 'production') return undefined;
+
+  const value = String(process.env.COOKIE_DOMAIN || '.mehor.com').trim();
+  return value || undefined;
+}
+
 function setDashboardSessionCookie(res, token, opts = {}) {
   const remember = opts.remember !== false;
   const isProd = process.env.NODE_ENV === 'production';
 
   const options = {
     httpOnly: true,
-    sameSite: isProd ? 'none' : 'lax',
     secure: isProd,
+    sameSite: 'lax',
+    domain: getDashboardCookieDomain(),
     path: '/',
   };
 
@@ -29,11 +37,11 @@ function setDashboardSessionCookie(res, token, opts = {}) {
 }
 
 function clearDashboardSessionCookie(res) {
-  const isProd = process.env.NODE_ENV === 'production';
   res.clearCookie(DASHBOARD_COOKIE_NAME, {
     path: '/',
-    sameSite: isProd ? 'none' : 'lax',
-    secure: isProd,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    domain: getDashboardCookieDomain(),
   });
 }
 
@@ -72,9 +80,11 @@ async function login(req, res) {
 
   const now = new Date().toISOString();
   try {
-    await db.prepare(
-      `UPDATE dashboard_users SET last_login_at = ?, updated_at = ? WHERE id = ?`,
-    ).run(now, now, user.id);
+    await db
+      .prepare(
+        `UPDATE dashboard_users SET last_login_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(now, now, user.id);
   } catch {
     // ignore
   }
