@@ -38,6 +38,9 @@ if (!Number.isFinite(port) || port <= 0)
 // Runs in-process; if you scale to multiple instances, consider moving this to a single worker.
 const TIMER_INTERVAL_MS = 60 * 1000;
 let timerHandle = null;
+let startupTimeoutHandle = null;
+let server = null;
+let shuttingDown = false;
 
 function startOrderTimers() {
   if (timerHandle) return;
@@ -51,7 +54,7 @@ function startOrderTimers() {
   };
 
   // Run once shortly after boot, then on interval.
-  setTimeout(() => {
+  startupTimeoutHandle = setTimeout(() => {
     void tick();
   }, 5000);
   timerHandle = setInterval(() => {
@@ -59,11 +62,42 @@ function startOrderTimers() {
   }, TIMER_INTERVAL_MS);
 }
 
+function stopOrderTimers() {
+  if (startupTimeoutHandle) {
+    clearTimeout(startupTimeoutHandle);
+    startupTimeoutHandle = null;
+  }
+
+  if (timerHandle) {
+    clearInterval(timerHandle);
+    timerHandle = null;
+  }
+}
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  stopOrderTimers();
+
+  if (server) {
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+
+  try {
+    await closeDatabase();
+  } finally {
+    if (signal) process.exit(0);
+  }
+}
+
 async function startServer() {
   await initializeDatabase();
 
   const app = createApp();
-  app.listen(port, () => {
+  server = app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(
       `Backend listening on http://localhost:${port} using ${databaseDriver}`,
@@ -73,11 +107,11 @@ async function startServer() {
 }
 
 process.on('SIGINT', () => {
-  void closeDatabase();
+  void shutdown('SIGINT');
 });
 
 process.on('SIGTERM', () => {
-  void closeDatabase();
+  void shutdown('SIGTERM');
 });
 
 void startServer();

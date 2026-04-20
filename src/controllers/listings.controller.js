@@ -8,6 +8,7 @@ const {
   deleteListingScreenshotByPublicId,
   createSignedImageUploadParams,
 } = require('../utils/cloudinary');
+const { safeJsonParse, toInt } = require('../utils/order');
 
 function extractMentions(text) {
   const body = String(text ?? '');
@@ -27,15 +28,13 @@ function extractMentions(text) {
   return Array.from(out);
 }
 
-async function notifyMentionsInQa(
-  {
-    text,
-    fromUserId,
-    listingId,
-    questionId,
-    replyId,
-  },
-) {
+async function notifyMentionsInQa({
+  text,
+  fromUserId,
+  listingId,
+  questionId,
+  replyId,
+}) {
   try {
     const usernames = extractMentions(text);
     if (usernames.length === 0) return;
@@ -86,15 +85,6 @@ function getViewerUserId(req) {
   }
 }
 
-function safeJsonParse(value, fallback) {
-  if (typeof value !== 'string' || value.trim() === '') return fallback;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
-
 function normalizeCategory(category) {
   const c = String(category || '').trim();
   const allowed = new Set([
@@ -117,13 +107,6 @@ function normalizeListingStatus(status) {
   const s = String(status || '').trim();
   const allowed = new Set(['active', 'draft']);
   return allowed.has(s) ? s : null;
-}
-
-function toInt(value, { min = 0, max = 1_000_000 } = {}) {
-  const n = Number.parseInt(String(value ?? '').trim(), 10);
-  if (!Number.isFinite(n)) return null;
-  if (n < min || n > max) return null;
-  return n;
 }
 
 function isUuid(value) {
@@ -248,7 +231,7 @@ function rowToMyListing(row) {
     description: row.description,
     stack: row.stack ?? '',
     demoUrl: row.demoUrl ?? '',
-    price: row.priceUsd,
+    price: Number(row.priceUsd ?? 0),
     addOns: Array.isArray(addOnsJson.addOns) ? addOnsJson.addOns : [],
     addOnPrices:
       typeof addOnsJson.addOnPrices === 'object' && addOnsJson.addOnPrices
@@ -516,8 +499,9 @@ async function createListing(req, res) {
   const screenshots =
     uploadedScreenshots.length > 0 ? [...uploadedScreenshots] : [];
 
-  await db.prepare(
-    `INSERT INTO listings (
+  await db
+    .prepare(
+      `INSERT INTO listings (
       id,
       seller_id,
       status,
@@ -537,26 +521,27 @@ async function createListing(req, res) {
       created_at,
       updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    sellerId,
-    status,
-    title,
-    category,
-    description,
-    stack || null,
-    demoUrl || null,
-    priceUsd,
-    JSON.stringify({ addOns, addOnPrices, addOnTimes }),
-    includes,
-    notIncluded || null,
-    notes || null,
-    supportDays,
-    deliveryMethod,
-    JSON.stringify(screenshots),
-    now,
-    now,
-  );
+    )
+    .run(
+      id,
+      sellerId,
+      status,
+      title,
+      category,
+      description,
+      stack || null,
+      demoUrl || null,
+      priceUsd,
+      JSON.stringify({ addOns, addOnPrices, addOnTimes }),
+      includes,
+      notIncluded || null,
+      notes || null,
+      supportDays,
+      deliveryMethod,
+      JSON.stringify(screenshots),
+      now,
+      now,
+    );
 
   return res.json({ ok: true, listing: { id } });
 }
@@ -880,10 +865,12 @@ async function createPublicListingQuestion(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await db.prepare(
-    `INSERT INTO listing_questions (id, listing_id, user_id, question, created_at)
+  await db
+    .prepare(
+      `INSERT INTO listing_questions (id, listing_id, user_id, question, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, listingId, userId, text, now);
+    )
+    .run(id, listingId, userId, text, now);
 
   const userRow = await db
     .prepare(
@@ -1007,17 +994,19 @@ async function togglePublicListingQuestionLike(req, res) {
 
   let liked = false;
   if (existing?.id) {
-    await db.prepare(`DELETE FROM listing_question_likes WHERE id = ?`).run(
-      existing.id,
-    );
+    await db
+      .prepare(`DELETE FROM listing_question_likes WHERE id = ?`)
+      .run(existing.id);
     liked = false;
   } else {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await db.prepare(
-      `INSERT INTO listing_question_likes (id, question_id, user_id, created_at)
+    await db
+      .prepare(
+        `INSERT INTO listing_question_likes (id, question_id, user_id, created_at)
        VALUES (?, ?, ?, ?)`,
-    ).run(id, questionId, userId, now);
+      )
+      .run(id, questionId, userId, now);
     liked = true;
 
     // Notify the question author about the like (best-effort).
@@ -1117,10 +1106,12 @@ async function createPublicListingReply(req, res) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await db.prepare(
-    `INSERT INTO listing_question_replies (id, question_id, user_id, reply, created_at)
+  await db
+    .prepare(
+      `INSERT INTO listing_question_replies (id, question_id, user_id, reply, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, questionId, userId, text, now);
+    )
+    .run(id, questionId, userId, text, now);
 
   // Notify the question author about the reply (best-effort).
   try {
@@ -1246,12 +1237,14 @@ async function updatePublicListingQuestion(req, res) {
   if (text.length > 800)
     return res.status(400).json({ error: 'Question is too long' });
 
-  await db.prepare(
-    `UPDATE listing_questions
+  await db
+    .prepare(
+      `UPDATE listing_questions
         SET question = ?
       WHERE id = ?
         AND listing_id = ?`,
-  ).run(text, questionId, listingId);
+    )
+    .run(text, questionId, listingId);
 
   return res.json({ ok: true, id: questionId, text });
 }
@@ -1294,11 +1287,13 @@ async function deletePublicListingQuestion(req, res) {
   if (String(qRow.userId) !== String(userId))
     return res.status(403).json({ error: 'Forbidden' });
 
-  await db.prepare(
-    `DELETE FROM listing_questions
+  await db
+    .prepare(
+      `DELETE FROM listing_questions
       WHERE id = ?
         AND listing_id = ?`,
-  ).run(questionId, listingId);
+    )
+    .run(questionId, listingId);
 
   return res.json({ ok: true });
 }
@@ -1352,12 +1347,14 @@ async function updatePublicListingReply(req, res) {
   if (text.length > 1_200)
     return res.status(400).json({ error: 'Reply is too long' });
 
-  await db.prepare(
-    `UPDATE listing_question_replies
+  await db
+    .prepare(
+      `UPDATE listing_question_replies
         SET reply = ?
       WHERE id = ?
         AND question_id = ?`,
-  ).run(text, replyId, questionId);
+    )
+    .run(text, replyId, questionId);
 
   return res.json({ ok: true, id: replyId, text });
 }
@@ -1406,11 +1403,13 @@ async function deletePublicListingReply(req, res) {
   if (String(meta.userId) !== String(userId))
     return res.status(403).json({ error: 'Forbidden' });
 
-  await db.prepare(
-    `DELETE FROM listing_question_replies
+  await db
+    .prepare(
+      `DELETE FROM listing_question_replies
       WHERE id = ?
         AND question_id = ?`,
-  ).run(replyId, questionId);
+    )
+    .run(replyId, questionId);
 
   return res.json({ ok: true });
 }
@@ -1462,7 +1461,7 @@ async function getMyListing(req, res) {
 
   const row = await getListingById(id);
   if (!row) return res.status(404).json({ error: 'Not Found' });
-  if (row.sellerId !== sellerId)
+  if (String(row.sellerId ?? '') !== String(sellerId))
     return res.status(403).json({ error: 'Not authorized' });
 
   return res.json({ listing: rowToMyListing(row) });
@@ -1583,8 +1582,9 @@ async function updateListing(req, res) {
 
   const now = new Date().toISOString();
 
-  await db.prepare(
-    `UPDATE listings
+  await db
+    .prepare(
+      `UPDATE listings
      SET status = ?,
          title = ?,
          category = ?,
@@ -1601,24 +1601,25 @@ async function updateListing(req, res) {
          screenshots_json = ?,
          updated_at = ?
      WHERE id = ?`,
-  ).run(
-    nextStatus,
-    title,
-    category,
-    description,
-    stack || null,
-    demoUrl || null,
-    priceUsd,
-    JSON.stringify({ addOns, addOnPrices, addOnTimes }),
-    includes,
-    notIncluded || null,
-    notes || null,
-    supportDays,
-    deliveryMethod,
-    JSON.stringify(nextShots),
-    now,
-    id,
-  );
+    )
+    .run(
+      nextStatus,
+      title,
+      category,
+      description,
+      stack || null,
+      demoUrl || null,
+      priceUsd,
+      JSON.stringify({ addOns, addOnPrices, addOnTimes }),
+      includes,
+      notIncluded || null,
+      notes || null,
+      supportDays,
+      deliveryMethod,
+      JSON.stringify(nextShots),
+      now,
+      id,
+    );
 
   return res.json({ ok: true });
 }

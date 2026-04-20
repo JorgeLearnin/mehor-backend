@@ -16,9 +16,7 @@ const {
   downloadReceiptPdf,
   markCompleted,
   markAddOnsCompleted,
-  requestMoreTime,
-  approveMoreTimeRequest,
-  declineMoreTimeRequest,
+  extendOrderTime,
   openDispute,
   cancelDispute,
   setDisputeSeedImages,
@@ -54,17 +52,7 @@ router.get('/:id/receipt', requireAuth, downloadReceiptPdf);
 router.post('/:id/deliver', requireAuth, upload.single('zip'), markDelivered);
 router.post('/:id/complete', requireAuth, markCompleted);
 router.post('/:id/addons/complete', requireAuth, markAddOnsCompleted);
-router.post('/:id/more-time', requireAuth, requestMoreTime);
-router.post(
-  '/:id/more-time/:requestId/approve',
-  requireAuth,
-  approveMoreTimeRequest,
-);
-router.post(
-  '/:id/more-time/:requestId/decline',
-  requireAuth,
-  declineMoreTimeRequest,
-);
+router.post('/:id/more-time', requireAuth, extendOrderTime);
 router.post('/:id/dispute', requireAuth, openDispute);
 router.post('/:id/dispute/cancel', requireAuth, cancelDispute);
 router.post(

@@ -18,6 +18,8 @@ const {
   toInt,
   computeOrderTotals,
   generateUniqueOrderNumber,
+  addDaysToIso,
+  addHoursToIso,
   completeExpiredReviewOrders,
 } = require('../utils/order');
 const {
@@ -58,35 +60,6 @@ function toMoreTimeStageKey(input) {
   return null;
 }
 
-function toMoreTimeRequestStatus(input) {
-  const v = String(input || '')
-    .trim()
-    .toLowerCase();
-  if (
-    v === 'applied' ||
-    v === 'pending' ||
-    v === 'approved' ||
-    v === 'declined'
-  ) {
-    return v;
-  }
-  return null;
-}
-
-function getMoreTimeApproverRole(stage) {
-  const s = toMoreTimeStageKey(stage);
-  if (!s) return null;
-  // Delivery + add-ons extensions are approved by the buyer.
-  // Review extensions are approved by the seller.
-  return s === 'review' || s === 'addons_review' ? 'seller' : 'buyer';
-}
-
-function getMoreTimeRequesterRole(stage) {
-  const s = toMoreTimeStageKey(stage);
-  if (!s) return null;
-  return s === 'review' || s === 'addons_review' ? 'buyer' : 'seller';
-}
-
 const DELIVERY_REVIEW_WINDOW_HOURS = 48;
 const ADDONS_REVIEW_WINDOW_HOURS = 48;
 
@@ -100,7 +73,7 @@ function computeFullRefundAmounts(row) {
   };
 }
 
-async function listMoreTimeRequests(orderId) {
+async function listMoreTimeExtensions(orderId) {
   const oid = String(orderId || '').trim();
   if (!oid) return [];
   try {
@@ -121,6 +94,7 @@ async function listMoreTimeRequests(orderId) {
                 deadline_after_iso AS deadlineAfterIso
            FROM order_more_time_requests
           WHERE order_id = ?
+            AND status IN ('applied', 'approved')
           ORDER BY created_at ASC`,
       )
       .all(oid);
@@ -132,7 +106,7 @@ async function listMoreTimeRequests(orderId) {
           requesterId: r.requesterId,
           requesterRole: r.requesterRole,
           hours: r.hours,
-          status: r.status,
+          status: 'applied',
           createdAt: r.createdAt,
           decidedAt: r.decidedAt ?? null,
           decidedById: r.decidedById ?? null,
@@ -150,7 +124,12 @@ async function listMoreTimeRequests(orderId) {
 function formatUsd(usdInt) {
   const n = Number(usdInt);
   if (!Number.isFinite(n)) return '$0.00';
-  return `$${n.toFixed(2)}`;
+  return n.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function toSafePdfFilename(filename, fallback = 'receipt.pdf') {
@@ -541,8 +520,6 @@ async function runOrderTimersTick({ nowIso } = {}) {
   const now = String(nowIso || new Date().toISOString()).trim();
   // 1) Auto-complete delivered orders whose review window ended.
   await completeExpiredReviewOrders({ nowIso: now });
-  // 1b) Auto-apply any legacy pending extension requests.
-  await autoApproveStaleMoreTimeRequests({ nowIso: now });
   // 2) Auto-complete add-ons once their buyer review window ends.
   await completeExpiredAddOnsReviewOrders({ nowIso: now });
   // 3) Auto-cancel + refund overdue paid orders.
@@ -552,179 +529,6 @@ async function runOrderTimersTick({ nowIso } = {}) {
   // 5) Notify when timers are close to ending.
   await notifyOrdersTimersEndingSoon({ nowIso: now });
   return { ok: true };
-}
-
-async function autoApproveStaleMoreTimeRequests({ nowIso } = {}) {
-  const now = String(nowIso || new Date().toISOString()).trim();
-  const nowMs = Date.parse(now);
-  if (!Number.isFinite(nowMs)) return { approvedCount: 0 };
-
-  // Previous behavior: approve after 24h unanswered.
-  // Current behavior: apply any pending request as soon as timers run.
-  const cutoffIso = now;
-
-  let approvedCount = 0;
-  let rows = [];
-  try {
-    rows = await db
-      .prepare(
-        `SELECT id,
-                order_id AS orderId,
-                stage,
-                requester_id AS requesterId,
-                requester_role AS requesterRole,
-                hours,
-                created_at AS createdAt,
-                deadline_after_iso AS deadlineAfterIso
-           FROM order_more_time_requests
-          WHERE status = 'pending'
-            AND created_at IS NOT NULL
-            AND created_at <= ?
-          ORDER BY created_at ASC
-          LIMIT 200`,
-      )
-      .all(cutoffIso);
-  } catch {
-    return { approvedCount: 0 };
-  }
-
-  if (!Array.isArray(rows) || !rows.length) return { approvedCount: 0 };
-
-  const tx = db.transaction(async (r) => {
-    const requestId = String(r.id || '').trim();
-    const orderId = String(r.orderId || '').trim();
-    if (!requestId || !orderId) return false;
-
-    const stage = toMoreTimeStageKey(r.stage);
-    if (!stage) return false;
-    const requesterId = String(r.requesterId || '').trim() || null;
-    const requesterRole = getMoreTimeRequesterRole(stage);
-    if (!requesterRole) return false;
-
-    const afterIso = String(r.deadlineAfterIso || '').trim();
-    if (!afterIso) return false;
-
-    const orderRow = await db
-      .prepare(
-        `SELECT id,
-                status,
-                created_at AS createdAt,
-                delivered_at AS deliveredAt,
-                addons_started_at AS addonsStartedAt,
-                addons_completed_at AS addonsCompletedAt,
-                dispute_opened_at AS disputeOpenedAt,
-                dispute_resolved_at AS disputeResolvedAt
-           FROM orders
-          WHERE id = ?
-          LIMIT 1`,
-      )
-      .get(orderId);
-
-    if (!orderRow) return false;
-    const statusLower = String(orderRow.status ?? '')
-      .trim()
-      .toLowerCase();
-    if (
-      statusLower === 'completed' ||
-      statusLower === 'canceled' ||
-      statusLower === 'cancelled'
-    ) {
-      return false;
-    }
-
-    const hasOpenDispute = Boolean(
-      String(orderRow.disputeOpenedAt || '').trim() &&
-      !String(orderRow.disputeResolvedAt || '').trim(),
-    );
-    if (hasOpenDispute) return false;
-
-    const deliveredAt = String(orderRow.deliveredAt || '').trim();
-    const addonsStartedAt = String(orderRow.addonsStartedAt || '').trim();
-    const addonsCompletedAt = String(orderRow.addonsCompletedAt || '').trim();
-
-    if (stage === 'delivery') {
-      if (deliveredAt) return false;
-      if (statusLower !== 'paid' && statusLower !== 'pending_payment') {
-        return false;
-      }
-      await db
-        .prepare(
-          `UPDATE orders
-            SET delivery_due_at = ?,
-                seller_more_time_requested_at = ?,
-                seller_more_time_hours = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        )
-        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
-    } else if (stage === 'review') {
-      if (!deliveredAt) return false;
-      await db
-        .prepare(
-          `UPDATE orders
-            SET review_ends_at = ?,
-                buyer_more_time_requested_at = ?,
-                buyer_more_time_hours = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        )
-        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
-    } else if (stage === 'addons') {
-      const inAddOnsStage =
-        (statusLower.startsWith('addons') || !!addonsStartedAt) &&
-        !addonsCompletedAt;
-      if (!inAddOnsStage) return false;
-      await db
-        .prepare(
-          `UPDATE orders
-            SET addons_due_at = ?,
-                seller_more_time_requested_at = ?,
-                seller_more_time_hours = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        )
-        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
-    } else {
-      if (statusLower !== 'addons_waiting_approval' || !addonsCompletedAt) {
-        return false;
-      }
-      await db
-        .prepare(
-          `UPDATE orders
-            SET addons_review_ends_at = ?,
-                buyer_more_time_requested_at = ?,
-                buyer_more_time_hours = ?,
-                updated_at = ?
-          WHERE id = ?`,
-        )
-        .run(afterIso, now, Number(r.hours ?? 0), now, orderId);
-    }
-
-    const info = await db
-      .prepare(
-        `UPDATE order_more_time_requests
-            SET status = 'applied',
-                decided_at = ?,
-                decided_by_id = ?,
-                decided_by_role = ?,
-                applied_at = COALESCE(applied_at, ?)
-          WHERE id = ? AND order_id = ? AND status = 'pending'`,
-      )
-      .run(now, requesterId, requesterRole, now, requestId, orderId);
-
-    return info?.changes > 0;
-  });
-
-  for (const r of rows) {
-    try {
-      const didApprove = await tx(r);
-      if (didApprove) approvedCount += 1;
-    } catch {
-      // best-effort
-    }
-  }
-
-  return { approvedCount };
 }
 
 async function notifyOrdersTimersEndingSoon({ nowIso }) {
@@ -1251,24 +1055,6 @@ async function downloadReceiptPdf(req, res) {
   doc.fontSize(9).fillColor('#666666').text('Thank you for your purchase.');
 
   doc.end();
-}
-
-function addDaysToIso(iso, days) {
-  const baseMs = Date.parse(String(iso || ''));
-  if (!Number.isFinite(baseMs)) return null;
-  const d = Number(days);
-  if (!Number.isFinite(d) || d <= 0) return null;
-  const ms = baseMs + Math.floor(d) * 24 * 60 * 60 * 1000;
-  return new Date(ms).toISOString();
-}
-
-function addHoursToIso(iso, hours) {
-  const baseMs = Date.parse(String(iso || ''));
-  if (!Number.isFinite(baseMs)) return null;
-  const h = Number(hours);
-  if (!Number.isFinite(h) || h <= 0) return null;
-  const ms = baseMs + Math.floor(h) * 60 * 60 * 1000;
-  return new Date(ms).toISOString();
 }
 
 function getStripe() {
@@ -2628,7 +2414,7 @@ async function getOrder(req, res) {
     viewerRole === 'seller' ? true : Boolean(deliveredAtIso);
   const canExposeDelivery = !buyerDeliveryRestricted && deliveryVisibleToViewer;
 
-  const moreTimeRequests = await listMoreTimeRequests(id);
+  const moreTimeExtensions = await listMoreTimeExtensions(id);
 
   const disputeRows = await (async () => {
     try {
@@ -2731,7 +2517,7 @@ async function getOrder(req, res) {
         buyerRequestedAt: row.buyerMoreTimeRequestedAt ?? null,
         buyerHours: row.buyerMoreTimeHours ?? null,
       },
-      moreTimeRequests,
+      moreTimeExtensions,
       delivery: {
         zipUrl:
           canExposeDelivery && row.deliveryZipUrl
@@ -2894,7 +2680,7 @@ async function downloadDeliveryZip(req, res) {
   }
 }
 
-async function requestMoreTime(req, res) {
+async function extendOrderTime(req, res) {
   const userId = String(req.user?.id ?? '').trim();
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
@@ -2958,7 +2744,7 @@ async function requestMoreTime(req, res) {
   if (hasOpenDispute) {
     return res
       .status(400)
-      .json({ error: 'Resolve dispute before requesting more time' });
+      .json({ error: 'Resolve dispute before extending time' });
   }
 
   if (
@@ -3017,31 +2803,30 @@ async function requestMoreTime(req, res) {
   else if (inAddOnsStage) stage = 'addons';
   else if (inReviewStage) stage = 'review';
 
-  const requesterRole = getMoreTimeRequesterRole(stage);
-  if (!requesterRole) {
-    return res.status(400).json({ error: 'Invalid request stage' });
-  }
+  const extensionRole =
+    stage === 'review' || stage === 'addons_review' ? 'buyer' : 'seller';
 
-  // Enforce the per-stage 2-request limit.
-  // Each stage is requestable by only one side, so requesterRole is a stable key.
+  // Enforce the per-stage 2-extension limit.
   const requestCountRow = await db
     .prepare(
       `SELECT COUNT(*) AS cnt
          FROM order_more_time_requests
-        WHERE order_id = ? AND stage = ? AND requester_role = ?`,
+        WHERE order_id = ?
+          AND stage = ?
+          AND requester_role = ?
+          AND status IN ('applied', 'approved')`,
     )
-    .get(id, stage, requesterRole);
+    .get(id, stage, extensionRole);
   const priorCount = Number(requestCountRow?.cnt ?? 0);
   if (priorCount >= 2) {
     return res
       .status(400)
-      .json({ error: 'Request limit reached for this stage' });
+      .json({ error: 'Extension limit reached for this stage' });
   }
 
-  const requesterId = userId;
-  const requestId = newId('more_time');
+  const extensionId = newId('more_time');
 
-  const insertRequest = async (fields) => {
+  const insertExtension = async ({ deadlineBeforeIso, deadlineAfterIso }) => {
     await db
       .prepare(
         `INSERT INTO order_more_time_requests (
@@ -3062,20 +2847,20 @@ async function requestMoreTime(req, res) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        requestId,
+        extensionId,
         id,
         stage,
-        requesterId,
-        requesterRole,
+        userId,
+        extensionRole,
         hours,
-        fields.status,
+        'applied',
         now,
-        fields.decidedAt,
-        fields.decidedById,
-        fields.decidedByRole,
-        fields.appliedAt,
-        fields.deadlineBeforeIso,
-        fields.deadlineAfterIso,
+        null,
+        null,
+        null,
+        now,
+        deadlineBeforeIso,
+        deadlineAfterIso,
       );
   };
 
@@ -3083,7 +2868,7 @@ async function requestMoreTime(req, res) {
     if (!isSeller) {
       return res
         .status(403)
-        .json({ error: 'Only the seller can request more time for add-ons' });
+        .json({ error: 'Only the seller can extend add-ons time' });
     }
     if (!totalAddOnDays) {
       return res.status(400).json({ error: 'No add-ons are in progress' });
@@ -3108,12 +2893,7 @@ async function requestMoreTime(req, res) {
       )
       .run(nextDue, now, hours, now, id);
 
-    await insertRequest({
-      status: 'applied',
-      decidedAt: now,
-      decidedById: requesterId,
-      decidedByRole: requesterRole,
-      appliedAt: now,
+    await insertExtension({
       deadlineBeforeIso: base,
       deadlineAfterIso: nextDue,
     });
@@ -3127,7 +2907,7 @@ async function requestMoreTime(req, res) {
   if (inAddOnsReviewStage) {
     if (!isBuyer) {
       return res.status(403).json({
-        error: 'Only the buyer can request more time during add-ons review',
+        error: 'Only the buyer can extend add-ons review time',
       });
     }
 
@@ -3158,12 +2938,7 @@ async function requestMoreTime(req, res) {
       )
       .run(nextEnds, now, hours, now, id);
 
-    await insertRequest({
-      status: 'applied',
-      decidedAt: now,
-      decidedById: requesterId,
-      decidedByRole: requesterRole,
-      appliedAt: now,
+    await insertExtension({
       deadlineBeforeIso: base,
       deadlineAfterIso: nextEnds,
     });
@@ -3178,7 +2953,7 @@ async function requestMoreTime(req, res) {
     if (!isBuyer) {
       return res
         .status(403)
-        .json({ error: 'Only the buyer can request more time during review' });
+        .json({ error: 'Only the buyer can extend review time' });
     }
 
     const deliveredAt = String(row.deliveredAt || '').trim();
@@ -3206,12 +2981,7 @@ async function requestMoreTime(req, res) {
       )
       .run(nextEnds, now, hours, now, id);
 
-    await insertRequest({
-      status: 'applied',
-      decidedAt: now,
-      decidedById: requesterId,
-      decidedByRole: requesterRole,
-      appliedAt: now,
+    await insertExtension({
       deadlineBeforeIso: base,
       deadlineAfterIso: nextEnds,
     });
@@ -3226,13 +2996,13 @@ async function requestMoreTime(req, res) {
   if (!isSeller) {
     return res
       .status(403)
-      .json({ error: 'Only the seller can request more time before delivery' });
+      .json({ error: 'Only the seller can extend delivery time' });
   }
 
   if (status !== 'paid' && status !== 'pending_payment') {
     return res
       .status(400)
-      .json({ error: 'More time can only be requested during delivery' });
+      .json({ error: 'Delivery time can only be extended before delivery' });
   }
 
   const base =
@@ -3242,8 +3012,6 @@ async function requestMoreTime(req, res) {
   if (!nextDue) {
     return res.status(500).json({ error: 'Could not compute new deadline' });
   }
-
-  // Final (2nd) request applies immediately, same as the first.
 
   await db
     .prepare(
@@ -3256,347 +3024,12 @@ async function requestMoreTime(req, res) {
     )
     .run(nextDue, now, hours, now, id);
 
-  await insertRequest({
-    status: 'applied',
-    decidedAt: now,
-    decidedById: requesterId,
-    decidedByRole: requesterRole,
-    appliedAt: now,
-    deadlineBeforeIso: base,
-    deadlineAfterIso: nextDue,
-  });
+  await insertExtension({ deadlineBeforeIso: base, deadlineAfterIso: nextDue });
 
   return res.json({
     ok: true,
     order: { id, deliveryDueAt: nextDue },
   });
-
-  return res.status(403).json({ error: 'Not authorized' });
-}
-
-async function approveMoreTimeRequest(req, res) {
-  const userId = String(req.user?.id ?? '').trim();
-  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
-
-  const orderId = String(req.params?.id ?? '').trim();
-  if (!orderId) return res.status(400).json({ error: 'Order id is required' });
-
-  const requestId = String(req.params?.requestId ?? '').trim();
-  if (!requestId)
-    return res.status(400).json({ error: 'Request id is required' });
-
-  const row = await db
-    .prepare(
-      `SELECT o.id,
-              o.buyer_id AS buyerId,
-              o.seller_id AS sellerId,
-              o.status,
-              o.created_at AS createdAt,
-              o.delivered_at AS deliveredAt,
-              o.addons_started_at AS addonsStartedAt,
-              o.addons_completed_at AS addonsCompletedAt,
-              o.selected_add_ons_json AS selectedAddOnsJson,
-              o.delivery_due_at AS deliveryDueAt,
-              o.review_ends_at AS reviewEndsAt,
-              o.addons_review_ends_at AS addonsReviewEndsAt,
-              o.addons_due_at AS addonsDueAt,
-              o.dispute_opened_at AS disputeOpenedAt,
-              o.dispute_resolved_at AS disputeResolvedAt,
-              l.add_ons_json AS listingAddOnsJson
-         FROM orders o
-         JOIN listings l ON l.id = o.listing_id
-        WHERE o.id = ?
-        LIMIT 1`,
-    )
-    .get(orderId);
-
-  if (!row) return res.status(404).json({ error: 'Not Found' });
-  if (row.buyerId !== userId && row.sellerId !== userId)
-    return res.status(403).json({ error: 'Not authorized' });
-
-  const statusLower = String(row.status ?? '').toLowerCase();
-  if (
-    statusLower === 'completed' ||
-    statusLower === 'canceled' ||
-    statusLower === 'cancelled'
-  ) {
-    return res.status(400).json({ error: 'Order is already finalized' });
-  }
-
-  const hasOpenDispute = Boolean(
-    String(row.disputeOpenedAt || '').trim() &&
-    !String(row.disputeResolvedAt || '').trim(),
-  );
-  if (hasOpenDispute) {
-    return res
-      .status(400)
-      .json({ error: 'Resolve dispute before approving more time' });
-  }
-
-  const reqRow = await db
-    .prepare(
-      `SELECT id,
-              stage,
-              requester_id AS requesterId,
-              requester_role AS requesterRole,
-              hours,
-              status,
-              created_at AS createdAt,
-              deadline_before_iso AS deadlineBeforeIso,
-              deadline_after_iso AS deadlineAfterIso
-         FROM order_more_time_requests
-        WHERE id = ? AND order_id = ?
-        LIMIT 1`,
-    )
-    .get(requestId, orderId);
-
-  if (!reqRow) return res.status(404).json({ error: 'Not Found' });
-  if (String(reqRow.status || '').toLowerCase() !== 'pending') {
-    return res.status(400).json({ error: 'Request is not pending' });
-  }
-
-  const stage = toMoreTimeStageKey(reqRow.stage);
-  if (!stage) return res.status(400).json({ error: 'Invalid request stage' });
-
-  const approverRole = getMoreTimeApproverRole(stage);
-  if (!approverRole) return res.status(400).json({ error: 'Invalid stage' });
-
-  const isApprover =
-    (approverRole === 'buyer' && row.buyerId === userId) ||
-    (approverRole === 'seller' && row.sellerId === userId);
-  if (!isApprover) {
-    return res.status(403).json({ error: 'Not authorized to approve' });
-  }
-
-  const afterIso = String(reqRow.deadlineAfterIso || '').trim();
-  if (!afterIso) {
-    return res.status(400).json({ error: 'Request is missing deadline' });
-  }
-
-  // Validate stage is still relevant.
-  const deliveredAt = String(row.deliveredAt || '').trim();
-  const addonsStartedAt = String(row.addonsStartedAt || '').trim();
-  const addonsCompletedAt = String(row.addonsCompletedAt || '').trim();
-
-  if (stage === 'delivery') {
-    if (deliveredAt) {
-      return res.status(400).json({ error: 'Order is already delivered' });
-    }
-    if (statusLower !== 'paid' && statusLower !== 'pending_payment') {
-      return res
-        .status(400)
-        .json({ error: 'Delivery stage is no longer active' });
-    }
-  }
-
-  if (stage === 'review') {
-    if (!deliveredAt) {
-      return res
-        .status(400)
-        .json({ error: 'Review window has not started yet' });
-    }
-  }
-
-  if (stage === 'addons') {
-    const selectedAddOns = safeJsonParse(row.selectedAddOnsJson, []);
-    const hasSelectedAddOns =
-      Array.isArray(selectedAddOns) && selectedAddOns.length;
-    const listingAddOnsJson = safeJsonParse(row.listingAddOnsJson, {
-      addOns: [],
-      addOnPrices: {},
-      addOnTimes: {},
-    });
-    const listingAddOnTimes =
-      typeof listingAddOnsJson.addOnTimes === 'object' &&
-      listingAddOnsJson.addOnTimes
-        ? listingAddOnsJson.addOnTimes
-        : {};
-    const totalAddOnDays = hasSelectedAddOns
-      ? Math.max(
-          0,
-          Math.min(
-            365,
-            selectedAddOns.reduce((sum, addOnId) => {
-              const key = String(addOnId ?? '').trim();
-              if (!key) return sum;
-              const raw = listingAddOnTimes[key];
-              const d = Number.parseInt(String(raw ?? ''), 10);
-              const days = Number.isFinite(d) && d > 0 ? d : 7;
-              return sum + days;
-            }, 0),
-          ),
-        )
-      : 0;
-
-    const inAddOnsStage =
-      (statusLower.startsWith('addons') || !!addonsStartedAt) &&
-      !addonsCompletedAt;
-    if (!inAddOnsStage || !totalAddOnDays) {
-      return res.status(400).json({ error: 'Add-ons are not in progress' });
-    }
-  }
-
-  if (stage === 'addons_review') {
-    if (statusLower !== 'addons_waiting_approval' || !addonsCompletedAt) {
-      return res
-        .status(400)
-        .json({ error: 'Add-ons review is no longer pending' });
-    }
-  }
-
-  const now = new Date().toISOString();
-
-  if (stage === 'delivery') {
-    await db
-      .prepare(
-        `UPDATE orders
-          SET delivery_due_at = ?,
-              seller_more_time_requested_at = ?,
-              seller_more_time_hours = ?,
-              updated_at = ?
-        WHERE id = ?`,
-      )
-      .run(afterIso, now, reqRow.hours, now, orderId);
-  } else if (stage === 'review') {
-    await db
-      .prepare(
-        `UPDATE orders
-          SET review_ends_at = ?,
-              buyer_more_time_requested_at = ?,
-              buyer_more_time_hours = ?,
-              updated_at = ?
-        WHERE id = ?`,
-      )
-      .run(afterIso, now, reqRow.hours, now, orderId);
-  } else if (stage === 'addons') {
-    await db
-      .prepare(
-        `UPDATE orders
-          SET addons_due_at = ?,
-              seller_more_time_requested_at = ?,
-              seller_more_time_hours = ?,
-              updated_at = ?
-        WHERE id = ?`,
-      )
-      .run(afterIso, now, reqRow.hours, now, orderId);
-  } else {
-    await db
-      .prepare(
-        `UPDATE orders
-          SET addons_review_ends_at = ?,
-              buyer_more_time_requested_at = ?,
-              buyer_more_time_hours = ?,
-              updated_at = ?
-        WHERE id = ?`,
-      )
-      .run(afterIso, now, reqRow.hours, now, orderId);
-  }
-
-  await db
-    .prepare(
-      `UPDATE order_more_time_requests
-        SET status = 'approved',
-            decided_at = ?,
-            decided_by_id = ?,
-            decided_by_role = ?,
-            applied_at = COALESCE(applied_at, ?)
-      WHERE id = ? AND order_id = ? AND status = 'pending'`,
-    )
-    .run(now, userId, approverRole, now, requestId, orderId);
-
-  return res.json({ ok: true });
-}
-
-async function declineMoreTimeRequest(req, res) {
-  const userId = String(req.user?.id ?? '').trim();
-  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
-
-  const orderId = String(req.params?.id ?? '').trim();
-  if (!orderId) return res.status(400).json({ error: 'Order id is required' });
-
-  const requestId = String(req.params?.requestId ?? '').trim();
-  if (!requestId)
-    return res.status(400).json({ error: 'Request id is required' });
-
-  const orderRow = await db
-    .prepare(
-      `SELECT id,
-              buyer_id AS buyerId,
-              seller_id AS sellerId,
-              status,
-              dispute_opened_at AS disputeOpenedAt,
-              dispute_resolved_at AS disputeResolvedAt
-         FROM orders
-        WHERE id = ?
-        LIMIT 1`,
-    )
-    .get(orderId);
-
-  if (!orderRow) return res.status(404).json({ error: 'Not Found' });
-  if (orderRow.buyerId !== userId && orderRow.sellerId !== userId)
-    return res.status(403).json({ error: 'Not authorized' });
-
-  const statusLower = String(orderRow.status ?? '').toLowerCase();
-  if (
-    statusLower === 'completed' ||
-    statusLower === 'canceled' ||
-    statusLower === 'cancelled'
-  ) {
-    return res.status(400).json({ error: 'Order is already finalized' });
-  }
-
-  const hasOpenDispute = Boolean(
-    String(orderRow.disputeOpenedAt || '').trim() &&
-    !String(orderRow.disputeResolvedAt || '').trim(),
-  );
-  if (hasOpenDispute) {
-    return res
-      .status(400)
-      .json({ error: 'Resolve dispute before declining more time' });
-  }
-
-  const reqRow = await db
-    .prepare(
-      `SELECT id,
-              stage,
-              status
-         FROM order_more_time_requests
-        WHERE id = ? AND order_id = ?
-        LIMIT 1`,
-    )
-    .get(requestId, orderId);
-
-  if (!reqRow) return res.status(404).json({ error: 'Not Found' });
-  if (String(reqRow.status || '').toLowerCase() !== 'pending') {
-    return res.status(400).json({ error: 'Request is not pending' });
-  }
-
-  const stage = toMoreTimeStageKey(reqRow.stage);
-  if (!stage) return res.status(400).json({ error: 'Invalid request stage' });
-
-  const approverRole = getMoreTimeApproverRole(stage);
-  if (!approverRole) return res.status(400).json({ error: 'Invalid stage' });
-
-  const isApprover =
-    (approverRole === 'buyer' && orderRow.buyerId === userId) ||
-    (approverRole === 'seller' && orderRow.sellerId === userId);
-  if (!isApprover) {
-    return res.status(403).json({ error: 'Not authorized to decline' });
-  }
-
-  const now = new Date().toISOString();
-  await db
-    .prepare(
-      `UPDATE order_more_time_requests
-        SET status = 'declined',
-            decided_at = ?,
-            decided_by_id = ?,
-            decided_by_role = ?
-      WHERE id = ? AND order_id = ? AND status = 'pending'`,
-    )
-    .run(now, userId, approverRole, requestId, orderId);
-
-  return res.json({ ok: true });
 }
 
 async function openDispute(req, res) {
@@ -4085,9 +3518,7 @@ module.exports = {
   downloadReceiptPdf,
   markCompleted,
   markAddOnsCompleted,
-  requestMoreTime,
-  approveMoreTimeRequest,
-  declineMoreTimeRequest,
+  extendOrderTime,
   openDispute,
   cancelDispute,
   setDisputeSeedImages,

@@ -7,23 +7,62 @@ const { signSession, verifySession } = require('../utils/jwt');
 const DASHBOARD_COOKIE_NAME =
   process.env.DASHBOARD_COOKIE_NAME || 'mehor_admin_session';
 
-function getDashboardCookieDomain() {
+function getRequestHostname(req) {
+  const rawHost =
+    req?.hostname || req?.get?.('x-forwarded-host') || req?.get?.('host') || '';
+  return String(rawHost).trim().split(':')[0].toLowerCase();
+}
+
+function isLocalHostname(hostname) {
+  return (
+    hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+  );
+}
+
+function getDashboardCookieDomain(req) {
+  const hostname = getRequestHostname(req);
+  if (isLocalHostname(hostname)) return undefined;
   if (process.env.NODE_ENV !== 'production') return undefined;
 
   const value = String(process.env.COOKIE_DOMAIN || '.mehor.com').trim();
   return value || undefined;
 }
 
-function setDashboardSessionCookie(res, token, opts = {}) {
+function shouldUseSecureDashboardCookie(req) {
+  const hostname = getRequestHostname(req);
+  if (isLocalHostname(hostname)) return false;
+  if (req?.secure) return true;
+
+  const forwardedProto = String(req?.get?.('x-forwarded-proto') || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  if (forwardedProto === 'https') return true;
+
+  return process.env.NODE_ENV === 'production';
+}
+
+function getDashboardCookieOptions(req, { includeDomain = true } = {}) {
+  const options = {
+    path: '/',
+    secure: shouldUseSecureDashboardCookie(req),
+    sameSite: 'lax',
+  };
+
+  if (includeDomain) {
+    const domain = getDashboardCookieDomain(req);
+    if (domain) options.domain = domain;
+  }
+
+  return options;
+}
+
+function setDashboardSessionCookie(req, res, token, opts = {}) {
   const remember = opts.remember !== false;
-  const isProd = process.env.NODE_ENV === 'production';
 
   const options = {
     httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
-    domain: getDashboardCookieDomain(),
-    path: '/',
+    ...getDashboardCookieOptions(req),
   };
 
   if (remember) {
@@ -36,13 +75,14 @@ function setDashboardSessionCookie(res, token, opts = {}) {
   res.cookie(DASHBOARD_COOKIE_NAME, token, options);
 }
 
-function clearDashboardSessionCookie(res) {
-  res.clearCookie(DASHBOARD_COOKIE_NAME, {
-    path: '/',
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    domain: getDashboardCookieDomain(),
-  });
+function clearDashboardSessionCookie(req, res) {
+  // Clear both domain-scoped and host-only variants so stale cookies do not
+  // trap the dashboard behind client-side cookie presence checks.
+  res.clearCookie(DASHBOARD_COOKIE_NAME, getDashboardCookieOptions(req));
+  res.clearCookie(
+    DASHBOARD_COOKIE_NAME,
+    getDashboardCookieOptions(req, { includeDomain: false }),
+  );
 }
 
 async function login(req, res) {
@@ -76,7 +116,8 @@ async function login(req, res) {
   });
 
   const rememberMe = remember === false ? false : true;
-  setDashboardSessionCookie(res, token, { remember: rememberMe });
+  clearDashboardSessionCookie(req, res);
+  setDashboardSessionCookie(req, res, token, { remember: rememberMe });
 
   const now = new Date().toISOString();
   try {
@@ -93,7 +134,7 @@ async function login(req, res) {
 }
 
 function logout(req, res) {
-  clearDashboardSessionCookie(res);
+  clearDashboardSessionCookie(req, res);
   return res.json({ ok: true });
 }
 

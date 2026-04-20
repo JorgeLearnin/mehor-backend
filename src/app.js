@@ -118,6 +118,16 @@ function createApp() {
   app.use((err, req, res, next) => {
     const status = typeof err.status === 'number' ? err.status : 500;
     const message = status >= 500 ? 'Internal Server Error' : err.message;
+
+    if (status >= 500) {
+      // eslint-disable-next-line no-console
+      console.error('[backend:error]', {
+        method: req.method,
+        path: req.originalUrl || req.url,
+        error: err,
+      });
+    }
+
     res.status(status).json({ error: message });
   });
 

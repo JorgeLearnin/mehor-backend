@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { db } = require('../db/db');
+const { toInt } = require('../utils/order');
 
 // Only ship the core v1 types (+ mentions).
 const ALLOWED_TYPES = new Set([
@@ -13,7 +14,6 @@ const ALLOWED_TYPES = new Set([
   'buyer.order_refunded',
   'buyer.review_ends_soon',
   'buyer.addons_review_ends_soon',
-  'buyer.more_time_approval_needed',
 
   // Seller
   'seller.new_order_received',
@@ -25,7 +25,6 @@ const ALLOWED_TYPES = new Set([
   'seller.order_canceled',
   'seller.delivery_due_soon',
   'seller.addons_due_soon',
-  'seller.more_time_approval_needed',
 
   // Buyer dispute notifications
   'buyer.dispute_message',
@@ -51,13 +50,6 @@ function timeAgo(iso) {
   if (wk < 5) return `${wk}w`;
   const mo = Math.floor(day / 30);
   return `${Math.max(1, mo)}mo`;
-}
-
-function toInt(value, { min = 1, max = 200 } = {}) {
-  const n = Number.parseInt(String(value ?? '').trim(), 10);
-  if (!Number.isFinite(n)) return null;
-  if (n < min || n > max) return null;
-  return n;
 }
 
 async function listNotifications(req, res) {
@@ -171,11 +163,13 @@ async function markAllRead(req, res) {
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   const now = new Date().toISOString();
-  await db.prepare(
-    `UPDATE notifications
+  await db
+    .prepare(
+      `UPDATE notifications
         SET read_at = COALESCE(read_at, ?)
       WHERE user_id = ?`,
-  ).run(now, userId);
+    )
+    .run(now, userId);
 
   return res.json({ ok: true });
 }
@@ -189,17 +183,15 @@ async function deleteAll(req, res) {
 }
 
 // Internal helper (used by other controllers)
-async function createNotification(
-  {
-    userId,
-    type,
-    title,
-    detail,
-    entityType = null,
-    entityId = null,
-    data = null,
-  },
-) {
+async function createNotification({
+  userId,
+  type,
+  title,
+  detail,
+  entityType = null,
+  entityId = null,
+  data = null,
+}) {
   const resolvedUserId = String(userId ?? '').trim();
   if (!resolvedUserId) return null;
 
@@ -213,22 +205,24 @@ async function createNotification(
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
 
-  await db.prepare(
-    `INSERT INTO notifications
+  await db
+    .prepare(
+      `INSERT INTO notifications
         (id, user_id, type, title, detail, entity_type, entity_id, data_json, read_at, created_at)
      VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-  ).run(
-    id,
-    resolvedUserId,
-    resolvedType,
-    resolvedTitle,
-    resolvedDetail,
-    entityType ? String(entityType) : null,
-    entityId ? String(entityId) : null,
-    data ? JSON.stringify(data) : null,
-    createdAt,
-  );
+    )
+    .run(
+      id,
+      resolvedUserId,
+      resolvedType,
+      resolvedTitle,
+      resolvedDetail,
+      entityType ? String(entityType) : null,
+      entityId ? String(entityId) : null,
+      data ? JSON.stringify(data) : null,
+      createdAt,
+    );
 
   return id;
 }
@@ -236,17 +230,15 @@ async function createNotification(
 // Internal helper (used by other controllers)
 // Coalesces duplicates: if an unread notification already exists for the same
 // (user,type,entityType,entityId), update it and bump created_at.
-async function upsertUnreadNotification(
-  {
-    userId,
-    type,
-    title,
-    detail,
-    entityType = null,
-    entityId = null,
-    data = null,
-  },
-) {
+async function upsertUnreadNotification({
+  userId,
+  type,
+  title,
+  detail,
+  entityType = null,
+  entityId = null,
+  data = null,
+}) {
   const resolvedUserId = String(userId ?? '').trim();
   if (!resolvedUserId) return null;
 
@@ -276,42 +268,46 @@ async function upsertUnreadNotification(
     .get(resolvedUserId, resolvedType, resolvedEntityType, resolvedEntityId);
 
   if (existing?.id) {
-    await db.prepare(
-      `UPDATE notifications
+    await db
+      .prepare(
+        `UPDATE notifications
           SET title = ?,
               detail = ?,
               data_json = ?,
               created_at = ?
         WHERE id = ?
           AND user_id = ?`,
-    ).run(
-      resolvedTitle,
-      resolvedDetail,
-      data ? JSON.stringify(data) : null,
-      now,
-      String(existing.id),
-      resolvedUserId,
-    );
+      )
+      .run(
+        resolvedTitle,
+        resolvedDetail,
+        data ? JSON.stringify(data) : null,
+        now,
+        String(existing.id),
+        resolvedUserId,
+      );
     return String(existing.id);
   }
 
   const id = crypto.randomUUID();
-  await db.prepare(
-    `INSERT INTO notifications
+  await db
+    .prepare(
+      `INSERT INTO notifications
         (id, user_id, type, title, detail, entity_type, entity_id, data_json, read_at, created_at)
      VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-  ).run(
-    id,
-    resolvedUserId,
-    resolvedType,
-    resolvedTitle,
-    resolvedDetail,
-    resolvedEntityType,
-    resolvedEntityId,
-    data ? JSON.stringify(data) : null,
-    now,
-  );
+    )
+    .run(
+      id,
+      resolvedUserId,
+      resolvedType,
+      resolvedTitle,
+      resolvedDetail,
+      resolvedEntityType,
+      resolvedEntityId,
+      data ? JSON.stringify(data) : null,
+      now,
+    );
 
   return id;
 }

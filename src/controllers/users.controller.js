@@ -5,16 +5,8 @@ const Stripe = require('stripe');
 
 const { db } = require('../db/db');
 const { completeExpiredReviewOrders } = require('../utils/order');
+const { safeJsonParse, toInt } = require('../utils/order');
 const { getSellerPlatformFeeBps, computeFeeUsd } = require('../utils/fees');
-
-function safeJsonParse(value, fallback) {
-  if (typeof value !== 'string' || value.trim() === '') return fallback;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
 
 function toSellerDisplayName(row) {
   const displayName = String(row?.sellerDisplayName ?? '').trim();
@@ -46,13 +38,6 @@ function toUserUsername(row) {
   const username = String(row?.username ?? '').trim();
   if (username) return username;
   return null;
-}
-
-function toInt(value, { min = 1, max = 50 } = {}) {
-  const n = Number.parseInt(String(value ?? '').trim(), 10);
-  if (!Number.isFinite(n)) return null;
-  if (n < min || n > max) return null;
-  return n;
 }
 
 async function listUsernames(req, res) {
@@ -219,16 +204,20 @@ async function toggleMySavedListing(req, res) {
     .get(userId, listingId);
 
   if (already) {
-    await db.prepare(
-      `DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`,
-    ).run(userId, listingId);
+    await db
+      .prepare(
+        `DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`,
+      )
+      .run(userId, listingId);
     return res.json({ saved: false });
   }
 
-  await db.prepare(
-    `INSERT INTO saved_listings (user_id, listing_id, created_at)
+  await db
+    .prepare(
+      `INSERT INTO saved_listings (user_id, listing_id, created_at)
      VALUES (?, ?, ?)`,
-  ).run(userId, listingId, new Date().toISOString());
+    )
+    .run(userId, listingId, new Date().toISOString());
 
   return res.json({ saved: true });
 }
@@ -241,9 +230,9 @@ async function removeMySavedListing(req, res) {
   if (!listingId)
     return res.status(400).json({ error: 'listingId is required' });
 
-  await db.prepare(
-    `DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`,
-  ).run(userId, listingId);
+  await db
+    .prepare(`DELETE FROM saved_listings WHERE user_id = ? AND listing_id = ?`)
+    .run(userId, listingId);
 
   return res.json({ saved: false });
 }
@@ -535,7 +524,7 @@ async function listMySales(req, res) {
         Number(r.listingPriceUsd ?? 0) + Number(r.addOnsTotalUsd ?? 0),
       soldAt: String(r.soldAt || '').trim(),
       listing: {
-        id: String(r.listingId),
+        id: String(r.listingId ?? ''),
         title: String(r.listingTitle || '').trim(),
       },
       buyer: {

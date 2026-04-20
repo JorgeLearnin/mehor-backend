@@ -11,7 +11,10 @@ async function requireSeller(req, res, next) {
     .get(id);
 
   if (!row) return res.status(401).json({ error: 'Not authenticated' });
-  if (!row.isSeller) return res.status(403).json({ error: 'Not authorized' });
+
+  const isSellerRaw = row.isSeller ?? 0;
+  const isSeller = Number(isSellerRaw) === 1 || isSellerRaw === true;
+  if (!isSeller) return res.status(403).json({ error: 'Not authorized' });
 
   // Controllers may rely on req.user.isSeller; the session payload may not include it.
   req.user = { ...(req.user || {}), isSeller: true };

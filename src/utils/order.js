@@ -97,6 +97,15 @@ function addDaysToIso(iso, days) {
   return new Date(ms).toISOString();
 }
 
+function addHoursToIso(iso, hours) {
+  const baseMs = Date.parse(String(iso || ''));
+  if (!Number.isFinite(baseMs)) return null;
+  const h = Number(hours);
+  if (!Number.isFinite(h) || h <= 0) return null;
+  const ms = baseMs + Math.floor(h) * 60 * 60 * 1000;
+  return new Date(ms).toISOString();
+}
+
 function getAddOnIncludedDays(addOnId) {
   const key = String(addOnId ?? '').trim();
   if (!key) return 0;
@@ -160,32 +169,38 @@ async function completeExpiredReviewOrders({ nowIso } = {}) {
         const addonsDueAt = totalAddOnDays
           ? addDaysToIso(now, totalAddOnDays)
           : null;
-        await db.prepare(
-          `UPDATE orders
+        await db
+          .prepare(
+            `UPDATE orders
               SET status = 'addons',
                   addons_started_at = COALESCE(addons_started_at, ?),
                   addons_due_at = COALESCE(addons_due_at, ?),
                   updated_at = ?
             WHERE id = ? AND status = 'delivered'`,
-        ).run(now, addonsDueAt, now, orderId);
+          )
+          .run(now, addonsDueAt, now, orderId);
 
         continue;
       }
 
-      await db.prepare(
-        `UPDATE orders
+      await db
+        .prepare(
+          `UPDATE orders
             SET status = 'completed',
                 finalized_reason = COALESCE(finalized_reason, 'auto_review_ended'),
                 finalized_at = COALESCE(finalized_at, ?),
                 updated_at = ?
           WHERE id = ? AND status = 'delivered'`,
-      ).run(now, now, orderId);
+        )
+        .run(now, now, orderId);
 
-      await db.prepare(
-        `UPDATE listings
+      await db
+        .prepare(
+          `UPDATE listings
             SET status = 'sold', updated_at = ?
           WHERE id = ? AND status = 'in_progress'`,
-      ).run(now, listingId);
+        )
+        .run(now, listingId);
     }
   })();
 
@@ -197,6 +212,8 @@ module.exports = {
   toInt,
   computeOrderTotals,
   generateUniqueOrderNumber,
+  addDaysToIso,
+  addHoursToIso,
   completeExpiredReviewOrders,
   computeSelectedAddOnsTotalDays,
 };

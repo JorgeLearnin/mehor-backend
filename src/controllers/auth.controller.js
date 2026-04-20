@@ -30,6 +30,45 @@ function isPasswordStrong(password) {
   return true;
 }
 
+function normalizePublicUser(user) {
+  if (!user) return null;
+
+  const id = String(user.id ?? '').trim();
+  const email = String(user.email ?? '').trim();
+  const username =
+    typeof user.username === 'string' ? user.username.trim() || null : null;
+  const fullNameRaw = typeof user.fullName === 'string' ? user.fullName : null;
+  const avatarUrlRaw =
+    typeof user.avatarUrl === 'string' ? user.avatarUrl : null;
+  const locationRaw =
+    typeof user.location === 'string' ? user.location : (user.location ?? null);
+  const bioRaw = typeof user.bio === 'string' ? user.bio : (user.bio ?? null);
+  const createdAtRaw =
+    typeof user.createdAt === 'string' ? user.createdAt : null;
+  const isSellerRaw = user.isSeller ?? 0;
+  const usedPromoRaw = user.usedFreeFirstSalePlatformFee ?? 0;
+
+  return {
+    id,
+    email,
+    username,
+    fullName:
+      typeof fullNameRaw === 'string' ? fullNameRaw.trim() || null : null,
+    avatarUrl:
+      typeof avatarUrlRaw === 'string' ? avatarUrlRaw.trim() || null : null,
+    location:
+      typeof locationRaw === 'string'
+        ? locationRaw.trim() || null
+        : locationRaw,
+    bio: typeof bioRaw === 'string' ? bioRaw || null : bioRaw,
+    isSeller: Number(isSellerRaw) === 1 || isSellerRaw === true,
+    usedFreeFirstSalePlatformFee:
+      Number(usedPromoRaw) === 1 || usedPromoRaw === true,
+    createdAt:
+      typeof createdAtRaw === 'string' ? createdAtRaw.trim() || null : null,
+  };
+}
+
 async function register(req, res) {
   const { email, password, fullName, username } = req.body || {};
   if (!email || !password)
@@ -63,18 +102,20 @@ async function register(req, res) {
   const createdAt = new Date().toISOString();
   const passwordHash = bcrypt.hashSync(password, 10);
 
-  await db.prepare(
-    `INSERT INTO users (id, email, password_hash, provider, provider_id, name, username, display_name, avatar_url, created_at)
+  await db
+    .prepare(
+      `INSERT INTO users (id, email, password_hash, provider, provider_id, name, username, display_name, avatar_url, created_at)
      VALUES (?, ?, ?, 'local', NULL, ?, ?, ?, NULL, ?)`,
-  ).run(
-    id,
-    email,
-    passwordHash,
-    null,
-    resolvedUsername,
-    resolvedFullName,
-    createdAt,
-  );
+    )
+    .run(
+      id,
+      email,
+      passwordHash,
+      null,
+      resolvedUsername,
+      resolvedFullName,
+      createdAt,
+    );
   return res.json({ ok: true });
 }
 
@@ -135,9 +176,11 @@ async function login(req, res) {
     email: user.email,
     username: user.username ?? null,
     fullName: resolvedFullName,
+    isSeller: Number(user.is_seller ?? 0) === 1,
   });
   const rememberMe = remember === false ? false : true;
-  setSessionCookie(res, token, { remember: rememberMe });
+  clearSessionCookie(req, res);
+  setSessionCookie(req, res, token, { remember: rememberMe });
   return res.json({ ok: true });
 }
 
@@ -164,13 +207,7 @@ async function me(req, res) {
 
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
 
-  const normalizedUser = {
-    ...user,
-    usedFreeFirstSalePlatformFee:
-      Number(user.usedFreeFirstSalePlatformFee ?? 0) === 1,
-  };
-
-  return res.json({ user: normalizedUser });
+  return res.json({ user: normalizePublicUser(user) });
 }
 
 function createAvatarUploadSignature(req, res) {
@@ -244,21 +281,23 @@ async function updateProfile(req, res) {
     return res.status(400).json({ error: 'Invalid avatar URL' });
   }
 
-  await db.prepare(
-    `UPDATE users
+  await db
+    .prepare(
+      `UPDATE users
      SET location = CASE WHEN ? = 1 THEN ? ELSE location END,
          bio = CASE WHEN ? = 1 THEN ? ELSE bio END,
          avatar_url = CASE WHEN ? = 1 THEN ? ELSE avatar_url END
      WHERE id = ?`,
-  ).run(
-    hasLocation ? 1 : 0,
-    hasLocation ? nextLocation : null,
-    hasBio ? 1 : 0,
-    hasBio ? nextBio : null,
-    hasAvatarUrl ? 1 : 0,
-    hasAvatarUrl ? nextAvatarUrl : null,
-    id,
-  );
+    )
+    .run(
+      hasLocation ? 1 : 0,
+      hasLocation ? nextLocation : null,
+      hasBio ? 1 : 0,
+      hasBio ? nextBio : null,
+      hasAvatarUrl ? 1 : 0,
+      hasAvatarUrl ? nextAvatarUrl : null,
+      id,
+    );
 
   const user = await db
     .prepare(
@@ -289,10 +328,9 @@ async function updateFullName(req, res) {
     return res.status(400).json({ error: 'Full name is too long' });
   }
 
-  await db.prepare(`UPDATE users SET display_name = ? WHERE id = ?`).run(
-    resolvedFullName,
-    id,
-  );
+  await db
+    .prepare(`UPDATE users SET display_name = ? WHERE id = ?`)
+    .run(resolvedFullName, id);
 
   return res.json({ ok: true });
 }
@@ -338,13 +376,14 @@ async function changePassword(req, res) {
     return res.status(401).json({ error: 'Current password is incorrect' });
 
   const passwordHash = bcrypt.hashSync(newPassword, 10);
-  await db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
-    passwordHash,
-    id,
-  );
+  await db
+    .prepare(`UPDATE users SET password_hash = ? WHERE id = ?`)
+    .run(passwordHash, id);
 
   // Invalidate any outstanding reset links for this user.
-  await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
+  await db
+    .prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`)
+    .run(id);
 
   return res.json({ ok: true });
 }
@@ -359,17 +398,17 @@ async function deleteAccount(req, res) {
   try {
     await deleteAvatarByUserId({ userId: id });
 
-    const listingIds = (await db
-      .prepare(`SELECT id FROM listings WHERE seller_id = ?`)
-      .all(id))
-      .map((r) => String(r.id));
+    const listingIds = (
+      await db.prepare(`SELECT id FROM listings WHERE seller_id = ?`).all(id)
+    ).map((r) => String(r.id));
 
-    const threadIds = (await db
-      .prepare(
-        `SELECT id FROM message_threads WHERE buyer_id = ? OR seller_id = ?`,
-      )
-      .all(id, id))
-      .map((r) => String(r.id));
+    const threadIds = (
+      await db
+        .prepare(
+          `SELECT id FROM message_threads WHERE buyer_id = ? OR seller_id = ?`,
+        )
+        .all(id, id)
+    ).map((r) => String(r.id));
 
     await Promise.all([
       ...listingIds.map((listingId) =>
@@ -396,13 +435,15 @@ async function deleteAccount(req, res) {
   }
 
   const tx = db.transaction(async () => {
-    await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(id);
+    await db
+      .prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`)
+      .run(id);
     await db.prepare(`DELETE FROM users WHERE id = ?`).run(id);
   });
 
   try {
     await tx();
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     return res.json({ ok: true });
   } catch (e) {
     // eslint-disable-next-line no-console
@@ -412,7 +453,7 @@ async function deleteAccount(req, res) {
 }
 
 function logout(req, res) {
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   return res.json({ ok: true });
 }
 
@@ -421,7 +462,29 @@ async function activateSeller(req, res) {
   if (!id) return res.status(401).json({ error: 'Not authenticated' });
 
   await db.prepare(`UPDATE users SET is_seller = 1 WHERE id = ?`).run(id);
-  return res.json({ ok: true });
+
+  const user = await db
+    .prepare(
+      `SELECT id,
+              email,
+              username,
+              display_name AS fullName,
+              avatar_url AS avatarUrl,
+              location,
+              bio,
+              is_seller AS isSeller,
+              used_free_first_sale_platform_fee AS usedFreeFirstSalePlatformFee,
+              created_at AS createdAt
+       FROM users
+       WHERE id = ?`,
+    )
+    .get(id);
+
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
+  req.user = { ...(req.user || {}), isSeller: true };
+
+  return res.json({ ok: true, user: normalizePublicUser(user) });
 }
 
 async function forgotPassword(req, res) {
@@ -443,14 +506,16 @@ async function forgotPassword(req, res) {
       const tokenHash = sha256Hex(token);
       const expiresAt = now + RESET_TOKEN_TTL_MS;
 
-      await db.prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`).run(
-        user.id,
-      );
+      await db
+        .prepare(`DELETE FROM password_reset_tokens WHERE user_id = ?`)
+        .run(user.id);
 
-      await db.prepare(
-        `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
+      await db
+        .prepare(
+          `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
          VALUES (?, ?, ?, ?, NULL, ?)`,
-      ).run(crypto.randomUUID(), user.id, tokenHash, expiresAt, now);
+        )
+        .run(crypto.randomUUID(), user.id, tokenHash, expiresAt, now);
 
       await sendPasswordResetEmail(user.email, token);
     }
@@ -469,9 +534,11 @@ async function resetPasswordStatus(req, res) {
   if (!trimmed) return res.status(400).json({ error: 'Token is required' });
 
   const now = Date.now();
-  await db.prepare(
-    `DELETE FROM password_reset_tokens WHERE expires_at <= ? OR used_at IS NOT NULL`,
-  ).run(now);
+  await db
+    .prepare(
+      `DELETE FROM password_reset_tokens WHERE expires_at <= ? OR used_at IS NOT NULL`,
+    )
+    .run(now);
 
   const tokenHash = sha256Hex(trimmed);
   const row = await db
@@ -519,15 +586,13 @@ async function resetPassword(req, res) {
     }
 
     const passwordHash = bcrypt.hashSync(password, 10);
-    await db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
-      passwordHash,
-      row.userId,
-    );
+    await db
+      .prepare(`UPDATE users SET password_hash = ? WHERE id = ?`)
+      .run(passwordHash, row.userId);
 
-    await db.prepare(`UPDATE password_reset_tokens SET used_at = ? WHERE id = ?`).run(
-      now,
-      row.id,
-    );
+    await db
+      .prepare(`UPDATE password_reset_tokens SET used_at = ? WHERE id = ?`)
+      .run(now, row.id);
   });
 
   try {

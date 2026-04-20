@@ -114,8 +114,28 @@ function normalizeNullSafeIs(sql) {
   return sql.replace(/\bIS\s+(\$\d+)/gi, 'IS NOT DISTINCT FROM $1');
 }
 
+function normalizeCamelCaseAliases(sql) {
+  return replacePlaceholders(sql, (source, index) => {
+    const prev = index === 0 ? '' : source[index - 1];
+    if (/[A-Za-z0-9_]/.test(prev)) return null;
+
+    const match = /^AS\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(source.slice(index));
+    if (!match) return null;
+
+    const alias = match[1];
+    if (!/[A-Z]/.test(alias)) return null;
+
+    return {
+      text: `AS "${alias}"`,
+      length: match[0].length,
+    };
+  });
+}
+
 function compilePreparedQuery(sql, args) {
-  const normalizedSql = normalizeInsertOrIgnore(String(sql || ''));
+  const normalizedSql = normalizeCamelCaseAliases(
+    normalizeInsertOrIgnore(String(sql || '')),
+  );
 
   if (args.length === 1 && isPlainObject(args[0])) {
     const input = args[0];
@@ -732,13 +752,13 @@ async function runDataFixups() {
 async function reconcilePlatformFeePromoState() {
   const row = await db
     .prepare(
-      `SELECT COUNT(1) AS usedCount
+      `SELECT COUNT(1) AS usedcount
          FROM users
         WHERE used_free_first_sale_platform_fee = 1`,
     )
     .get();
 
-  const usedCount = Math.max(0, Number(row?.usedcount ?? row?.usedCount ?? 0));
+  const usedCount = Math.max(0, Number(row?.usedcount ?? 0));
   const remaining = Math.max(0, FREE_FIRST_SALE_SLOTS_TOTAL - usedCount);
   const now = new Date().toISOString();
 
