@@ -5,8 +5,6 @@ const cookieParser = require('cookie-parser');
 
 require('dotenv').config();
 
-const pool = require('./db');
-
 const authRoutes = require('./routes/auth.routes');
 const sellerRoutes = require('./routes/seller.routes');
 const listingsRoutes = require('./routes/listings.routes');
@@ -75,15 +73,6 @@ app.use('/api/dashboard', dashboardMarketplaceRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
-});
-
-app.get('/api/db-test', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.json({ connected: true, time: result.rows[0].now });
-  } catch (error) {
-    res.status(500).json({ connected: false, error: error.message });
-  }
 });
 
 const PORT = process.env.PORT || 4000;

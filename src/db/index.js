@@ -1,11 +1,14 @@
 const { Pool } = require('pg');
 
+const { DATABASE_URL, DATABASE_SSL } = process.env;
+
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL is required.');
+}
+
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: Number(process.env.DB_PORT),
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
 });
 
 module.exports = pool;
