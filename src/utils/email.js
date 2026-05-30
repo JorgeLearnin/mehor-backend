@@ -18,13 +18,21 @@ const getResendFromEmail = () => {
   return process.env.RESEND_FROM_EMAIL;
 };
 
+const getResendNoReplyEmail = () => {
+  if (!process.env.RESEND_NO_REPLY_EMAIL) {
+    return getResendFromEmail();
+  }
+
+  return process.env.RESEND_NO_REPLY_EMAIL;
+};
+
 const sendPasswordResetEmail = async ({ to, resetUrl }) => {
   if (!process.env.RESEND_API_KEY) {
     throw new Error('RESEND_API_KEY is missing.');
   }
 
   return resend.emails.send({
-    from: getResendFromEmail(),
+    from: getResendNoReplyEmail(),
     to,
     subject: 'Reset your Mehor password',
     html: `
@@ -158,7 +166,7 @@ const sendTransactionalEmail = async ({
   const safeActionLabel = escapeHtml(actionLabel);
 
   return resend.emails.send({
-    from: getResendFromEmail(),
+    from: getResendNoReplyEmail(),
     to,
     subject,
     text: [title || subject, '', body || '', '', absoluteActionUrl || '']

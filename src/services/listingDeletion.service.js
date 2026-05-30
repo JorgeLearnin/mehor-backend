@@ -2,7 +2,7 @@ const pool = require('../db');
 const cloudinary = require('../lib/cloudinary');
 
 const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function normalizeUuid(value) {
   if (typeof value !== 'string') return '';
@@ -38,8 +38,13 @@ async function getListingImagePublicIds({ client, listingIds }) {
   return normalizePublicIds(result.rows);
 }
 
-async function destroyListingImageAssets(publicIds, context = 'listing_cleanup') {
-  const uniquePublicIds = [...new Set(publicIds.map((id) => String(id || '').trim()).filter(Boolean))];
+async function destroyListingImageAssets(
+  publicIds,
+  context = 'listing_cleanup',
+) {
+  const uniquePublicIds = [
+    ...new Set(publicIds.map((id) => String(id || '').trim()).filter(Boolean)),
+  ];
 
   for (const publicId of uniquePublicIds) {
     try {
@@ -189,7 +194,10 @@ async function hardDeleteListingSafely(options) {
   try {
     return await hardDeleteListing(options);
   } catch (error) {
-    console.error(`${options?.context || 'listing_cleanup'} hard delete error:`, error);
+    console.error(
+      `${options?.context || 'listing_cleanup'} hard delete error:`,
+      error,
+    );
 
     return {
       deletedCount: 0,
