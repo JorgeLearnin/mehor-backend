@@ -1,6 +1,18 @@
 const db = require('../db');
 const stripe = require('../lib/stripe');
 
+const getWebsiteOrigin = () => {
+  const origin =
+    process.env.WEBSITE_ORIGIN ||
+    process.env.CLIENT_URL ||
+    String(process.env.CLIENT_ORIGIN || '')
+      .split(',')
+      .map((value) => value.trim())
+      .find((value) => value.startsWith('http'));
+
+  return (origin || 'http://localhost:3000').replace(/\/+$/, '');
+};
+
 async function getSellerOnboardingStatus(req, res) {
   try {
     const userId = req.user.id;
@@ -95,10 +107,12 @@ async function createStripeLink(req, res) {
     }
 
     // 3. Create onboarding link
+    const websiteOrigin = getWebsiteOrigin();
+
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: 'http://localhost:3000/become-seller',
-      return_url: 'http://localhost:3000/become-seller',
+      refresh_url: `${websiteOrigin}/become-seller`,
+      return_url: `${websiteOrigin}/become-seller`,
       type: 'account_onboarding',
     });
 
