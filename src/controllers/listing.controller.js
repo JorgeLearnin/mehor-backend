@@ -539,6 +539,78 @@ const getListings = async (req, res) => {
   }
 };
 
+const getListingSeo = async (req, res) => {
+  try {
+    const { listingId } = req.params;
+
+    if (!isUuid(listingId)) {
+      return res.status(400).json({ error: 'Invalid listing id' });
+    }
+
+    const listingResult = await pool.query(
+      `
+      SELECT
+        l.id,
+        l.listing_type,
+        l.title,
+        l.description,
+        l.base_price_cents,
+        l.status,
+        l.created_at,
+        l.updated_at,
+        CASE
+          WHEN u.status = 'deleted' OR u.deleted_at IS NOT NULL THEN 'Deleted user'
+          ELSE COALESCE(u.full_name, u.username)
+        END AS seller_name,
+        CASE
+          WHEN u.status = 'deleted' OR u.deleted_at IS NOT NULL THEN NULL
+          ELSE u.username
+        END AS seller_username,
+        (
+          SELECT li.url
+          FROM listing_images li
+          WHERE li.listing_id = l.id
+          ORDER BY li.position ASC
+          LIMIT 1
+        ) AS cover_image,
+        COALESCE(
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT ls.name), NULL),
+          '{}'
+        ) AS stacks
+      FROM listings l
+      JOIN users u ON u.id = l.seller_id
+      LEFT JOIN listing_stacks ls ON ls.listing_id = l.id
+      WHERE l.id = $1
+        AND l.status = 'published'
+      GROUP BY
+        l.id,
+        l.listing_type,
+        l.title,
+        l.description,
+        l.base_price_cents,
+        l.status,
+        l.created_at,
+        l.updated_at,
+        u.full_name,
+        u.username,
+        u.status,
+        u.deleted_at
+      LIMIT 1
+      `,
+      [listingId],
+    );
+
+    if (listingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    return res.json({ listing: listingResult.rows[0] });
+  } catch (err) {
+    console.error('Get listing SEO error:', err);
+    return res.status(500).json({ error: 'Failed to get listing SEO data' });
+  }
+};
+
 const getListingById = async (req, res) => {
   try {
     const { listingId } = req.params;
@@ -1899,6 +1971,7 @@ const toggleListingQuestionLike = async (req, res) => {
 module.exports = {
   createListing,
   getListings,
+  getListingSeo,
   getListingById,
   getMyListingById,
   getDraftListing,

@@ -5,6 +5,7 @@ const requireAuth = require('../middleware/requireAuth');
 const {
   createListing,
   getListings,
+  getListingSeo,
   getListingById,
   getMyListingById,
   getDraftListing,
@@ -31,6 +32,7 @@ router.patch('/:listingId', requireAuth, updatePublishedListing);
 router.delete('/:listingId', requireAuth, deleteListing);
 router.post('/', requireAuth, createListing);
 
+router.get('/:listingId/seo', getListingSeo);
 router.get('/:listingId/qa', getListingQa);
 router.post('/:listingId/qa', requireAuth, createListingQuestion);
 router.patch('/:listingId/qa/:questionId', requireAuth, updateListingQuestion);
