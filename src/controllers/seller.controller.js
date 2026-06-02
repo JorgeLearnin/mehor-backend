@@ -123,6 +123,55 @@ async function createStripeLink(req, res) {
   }
 }
 
+async function handleStripeConnectWebhook(req, res) {
+  const signature = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.error('Stripe Connect webhook secret is not configured.');
+    return res.status(500).send('Webhook secret not configured.');
+  }
+
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
+  } catch (error) {
+    console.error('Stripe Connect webhook signature error:', error.message);
+    return res.status(400).send(`Webhook Error: ${error.message}`);
+  }
+
+  try {
+    if (event.type === 'account.updated') {
+      const account = event.data.object;
+
+      if (account?.id) {
+        const chargesEnabled = account.charges_enabled === true;
+        const payoutsEnabled = account.payouts_enabled === true;
+        const onboardingComplete = chargesEnabled && payoutsEnabled;
+
+        await db.query(
+          `
+          UPDATE users
+          SET
+            stripe_onboarding_complete = $1,
+            stripe_charges_enabled = $2,
+            stripe_payouts_enabled = $3,
+            updated_at = NOW()
+          WHERE stripe_account_id = $4
+          `,
+          [onboardingComplete, chargesEnabled, payoutsEnabled, account.id],
+        );
+      }
+    }
+
+    return res.json({ received: true });
+  } catch (error) {
+    console.error('Stripe Connect webhook handler error:', error);
+    return res.status(500).send('Webhook handler failed.');
+  }
+}
+
 async function syncStripeStatus(req, res) {
   try {
     const userId = req.user.id;
@@ -257,6 +306,7 @@ module.exports = {
   getSellerOnboardingStatus,
   acceptSellerTerms,
   createStripeLink,
+  handleStripeConnectWebhook,
   syncStripeStatus,
   activateSellerAccount,
 };

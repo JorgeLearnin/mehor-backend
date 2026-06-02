@@ -24,6 +24,9 @@ const {
   handleStripeWebhook,
   processExpiredOrderWindows,
 } = require('./controllers/order.controller');
+const {
+  handleStripeConnectWebhook,
+} = require('./controllers/seller.controller');
 
 const app = express();
 
@@ -51,6 +54,12 @@ app.post(
   '/api/orders/stripe-webhook',
   express.raw({ type: 'application/json' }),
   handleStripeWebhook,
+);
+
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  handleStripeConnectWebhook,
 );
 
 app.use(express.json());
