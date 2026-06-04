@@ -123,6 +123,39 @@ async function createStripeLink(req, res) {
   }
 }
 
+async function createStripeDashboardLink(req, res) {
+  try {
+    const userId = req.user.id;
+
+    const result = await db.query(
+      `
+      SELECT stripe_account_id
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [userId],
+    );
+
+    const accountId = result.rows[0]?.stripe_account_id;
+
+    if (!accountId) {
+      return res.status(400).json({
+        message: 'Complete Stripe onboarding first.',
+      });
+    }
+
+    const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+    return res.json({ url: loginLink.url });
+  } catch (error) {
+    console.error('Stripe dashboard link error:', error);
+    return res.status(500).json({
+      message: 'Could not open Stripe dashboard.',
+    });
+  }
+}
+
 async function handleStripeConnectWebhook(req, res) {
   const signature = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
@@ -306,6 +339,7 @@ module.exports = {
   getSellerOnboardingStatus,
   acceptSellerTerms,
   createStripeLink,
+  createStripeDashboardLink,
   handleStripeConnectWebhook,
   syncStripeStatus,
   activateSellerAccount,
