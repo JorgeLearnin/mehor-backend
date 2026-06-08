@@ -405,6 +405,38 @@ function getReceiptType(order) {
   return 'completed_order';
 }
 
+function getReceiptStatusLabel(order) {
+  const status = String(order?.status ?? '')
+    .trim()
+    .toLowerCase();
+
+  const refundedAmountCents = getRefundedAmountCents(order);
+
+  if (status === 'canceled') return 'canceled';
+
+  if (status === 'completed' && refundedAmountCents > 0) {
+    return 'part-refunded';
+  }
+
+  return 'completed';
+}
+
+function getReceiptDeliveryAccessLabel(deliveries = []) {
+  const hasZip = deliveries.some((delivery) =>
+    Boolean(String(delivery.zip_filename ?? '').trim()),
+  );
+
+  const hasRepo = deliveries.some((delivery) =>
+    Boolean(String(delivery.repo_link ?? '').trim()),
+  );
+
+  if (hasZip && hasRepo) return 'ZIP + Repo Access';
+  if (hasZip) return 'ZIP Access';
+  if (hasRepo) return 'Repo Access';
+
+  return 'No delivery access recorded';
+}
+
 function getSafeReceiptFilename(orderNumber) {
   const safeOrderNumber = String(orderNumber ?? '')
     .trim()
@@ -426,10 +458,6 @@ function formatReceiptDateEastern(value) {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZoneName: 'long',
   }).formatToParts(date);
 
   const get = (type) => parts.find((part) => part.type === type).value ?? '';
@@ -438,12 +466,8 @@ function formatReceiptDateEastern(value) {
   const month = get('month');
   const day = get('day');
   const year = get('year');
-  const hour = get('hour');
-  const minute = get('minute');
-  const dayPeriod = get('dayPeriod').toLowerCase();
-  const timeZoneName = 'Eastern Time';
 
-  return `${weekday} ${month} ${day}, ${year} ${hour}:${minute}${dayPeriod} ${timeZoneName}`;
+  return `${weekday} ${month} ${day}, ${year} (eastern time)`;
 }
 
 function getSafeDownloadFilename(filename) {
@@ -456,10 +480,112 @@ function getSafeDownloadFilename(filename) {
     : `${cleaned || 'delivery'}.zip`;
 }
 
+function drawReceiptBrandBlock(doc) {
+  const pageWidth = doc.page.width;
+  const leftMargin = doc.page.margins.left;
+  const rightMargin = doc.page.margins.right;
+
+  const logoSize = 44;
+  const logoFontSize = 26;
+  const logoRadius = 12;
+  const top = 54;
+  const logoLeft = leftMargin;
+
+  doc
+    .roundedRect(logoLeft, top, logoSize, logoSize, logoRadius)
+    .fill('#020617');
+
+  const mTop = top + 13;
+
+  doc
+    .fillColor('#fff')
+    .font('Helvetica-Bold')
+    .fontSize(logoFontSize)
+    .text('M', logoLeft, mTop, {
+      width: logoSize,
+      align: 'center',
+      lineBreak: false,
+    })
+    .text('M', logoLeft + 0.35, mTop, {
+      width: logoSize,
+      align: 'center',
+      lineBreak: false,
+    })
+    .text('M', logoLeft - 0.35, mTop, {
+      width: logoSize,
+      align: 'center',
+      lineBreak: false,
+    });
+
+  const brandTextLeft = logoLeft + logoSize + 10;
+
+  doc
+    .fillColor('#000')
+    .font('Helvetica-Bold')
+    .fontSize(14)
+    .text('Mehor', brandTextLeft, top + 3, {
+      lineBreak: false,
+    });
+
+  doc
+    .fillColor('#555')
+    .font('Helvetica')
+    .fontSize(9.5)
+    .text('Ready-to-launch websites and mobile apps', brandTextLeft, top + 22, {
+      lineBreak: false,
+    });
+
+  const contactEmail = 'support@mehor.com';
+  const contactWidth = 180;
+  const contactLeft = pageWidth - rightMargin - contactWidth;
+
+  doc
+    .fillColor('#000')
+    .font('Helvetica-Bold')
+    .fontSize(10)
+    .text('Mehor Support', contactLeft, top + 1, {
+      width: contactWidth,
+      align: 'right',
+      lineBreak: false,
+    });
+
+  doc
+    .fillColor('#555')
+    .font('Helvetica')
+    .fontSize(9.5)
+    .text(contactEmail, contactLeft, top + 15, {
+      width: contactWidth,
+      align: 'right',
+      lineBreak: false,
+    });
+
+  doc
+    .fillColor('#555')
+    .font('Helvetica')
+    .fontSize(8.5)
+    .text('Order help', contactLeft, top + 29, {
+      width: contactWidth,
+      align: 'right',
+      lineBreak: false,
+    })
+    .text('Payment questions', contactLeft, top + 41, {
+      width: contactWidth,
+      align: 'right',
+      lineBreak: false,
+    })
+    .text('Delivery issues', contactLeft, top + 53, {
+      width: contactWidth,
+      align: 'right',
+      lineBreak: false,
+    });
+
+  doc.fillColor('#000').font('Helvetica');
+}
+
 function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
-  const receiptType = getReceiptType(order);
+  const receiptStatusLabel = getReceiptStatusLabel(order);
+  const deliveryAccessLabel = getReceiptDeliveryAccessLabel(deliveries);
   const refundedAmountCents = getRefundedAmountCents(order);
-  const currency = String(order.currency ?? 'usd').toUpperCase();
   const finalizedAt = formatReceiptDateEastern(
     order.finalized_at ?? order.completed_at ?? order.canceled_at ?? null,
   );
@@ -467,11 +593,15 @@ function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
   const isBuyerReceipt = viewerRole === 'buyer';
   const isSellerReceipt = viewerRole === 'seller';
 
+  const orderNumber = String(order.order_number ?? '').trim();
+  const orderTitle = orderNumber ? `Order: #${orderNumber}` : 'Order: #';
+  const listingTitle = String(order.listing_title ?? 'Untitled listing').trim();
+
   const doc = new PDFDocument({
     size: 'LETTER',
     margin: 54,
     info: {
-      Title: `Mehor Receipt ${order.order_number ?? ''}`,
+      Title: `Mehor Receipt ${orderNumber}`,
       Author: 'Mehor',
       Subject: 'Order receipt',
     },
@@ -479,11 +609,25 @@ function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
 
   doc.pipe(res);
 
-  doc.fontSize(22).text('Mehor receipt', { align: 'left' });
-  doc.moveDown(0.5);
+  drawReceiptBrandBlock(doc);
 
-  doc.fontSize(10).fillColor('#555').text('Official order receipt');
-  doc.moveDown(1.5);
+  doc.x = doc.page.margins.left;
+  doc.y = doc.page.margins.top + 72;
+
+  doc.fontSize(26).font('Helvetica-Bold').fillColor('#000').text(orderTitle, {
+    align: 'left',
+  });
+
+  doc.moveDown(0.18);
+
+  doc.fontSize(13).font('Helvetica').fillColor('#222').text(listingTitle);
+
+  if (finalizedAt) {
+    doc.moveDown(0.35);
+    doc.fontSize(10).fillColor('#555').text(finalizedAt);
+  }
+
+  doc.moveDown(1.25);
 
   doc.fillColor('#000').fontSize(12);
 
@@ -492,16 +636,19 @@ function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
     doc.font('Helvetica').text(String(value ?? ''));
   };
 
-  row('Receipt type', receiptType);
-  row('Order number', order.order_number ?? '');
-  row('Order status', order.status ?? '');
-  row('Payment status', order.payment_status ?? '');
-  row('Listing', order.listing_title ?? '');
-  row('Currency', currency);
-  row('Finalized at', finalizedAt);
+  row('Status', receiptStatusLabel);
 
   doc.moveDown(1.25);
-  doc.fontSize(15).font('Helvetica-Bold').text('Amounts');
+  doc
+    .fontSize(15)
+    .font('Helvetica-Bold')
+    .text('Amounts ', { continued: true })
+    .fontSize(10)
+    .font('Helvetica')
+    .fillColor('#555')
+    .text('(fees are non-refundable)');
+
+  doc.fillColor('#000');
   doc.moveDown(0.5);
   doc.fontSize(12).font('Helvetica');
 
@@ -540,22 +687,9 @@ function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
   }
 
   doc.moveDown(1.25);
-  doc.fontSize(15).font('Helvetica-Bold').text('Delivery');
+  doc.fontSize(15).font('Helvetica-Bold').text('Delivery method');
   doc.moveDown(0.5);
-  doc.fontSize(12).font('Helvetica');
-
-  if (deliveries.length > 0) {
-    deliveries.forEach((delivery, index) => {
-      const hasZip = Boolean(String(delivery.zip_filename ?? '').trim());
-      const hasRepo = Boolean(String(delivery.repo_link ?? '').trim());
-
-      doc.text(`${index + 1}. Delivery submitted`);
-      doc.text(`   ZIP: ${hasZip ? delivery.zip_filename : 'None'}`);
-      doc.text(`   Repository: ${hasRepo ? delivery.repo_link : 'None'}`);
-    });
-  } else {
-    doc.text('No delivery records');
-  }
+  doc.fontSize(12).font('Helvetica').text(deliveryAccessLabel);
 
   doc.moveDown(1.5);
 
@@ -563,8 +697,6 @@ function buildOrderReceiptPdf({ res, order, addons, deliveries, viewerRole }) {
     doc.fontSize(11).fillColor('#000').text('Thank you for your purchase.');
     doc.moveDown(0.75);
   }
-
-  doc.fontSize(10).fillColor('#555').text('Fees are non-refundable.');
 
   doc.end();
 }
