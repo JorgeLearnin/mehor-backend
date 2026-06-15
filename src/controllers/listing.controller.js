@@ -342,6 +342,8 @@ const getListings = async (req, res) => {
     const rawSearch = req.query.q;
     const rawSort = req.query.sort;
     const rawLimit = req.query.limit;
+    const rawPage = req.query.page;
+    const rawPageSize = req.query.pageSize;
 
     if (rawType !== undefined) {
       if (
@@ -410,11 +412,59 @@ const getListings = async (req, res) => {
       return { value: parsed };
     };
 
+    const parsePageQueryParam = (value) => {
+      if (value === undefined) {
+        return null;
+      }
+
+      if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        return { error: 'Page must be a positive integer.' };
+      }
+
+      const parsed = Number.parseInt(value, 10);
+
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        return { error: 'Page must be a positive integer.' };
+      }
+
+      return { value: parsed };
+    };
+
+    const parsePageSizeQueryParam = (value) => {
+      if (value === undefined) {
+        return null;
+      }
+
+      if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        return { error: 'Page size must be a positive integer.' };
+      }
+
+      const parsed = Number.parseInt(value, 10);
+
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 24) {
+        return { error: 'Page size must be between 1 and 24.' };
+      }
+
+      return { value: parsed };
+    };
+
     const limitResult = parseLimitQueryParam(rawLimit);
+    const pageResult = parsePageQueryParam(rawPage);
+    const pageSizeResult = parsePageSizeQueryParam(rawPageSize);
 
     if (limitResult?.error) {
       return res.status(400).json({ error: limitResult.error });
     }
+
+    if (pageResult?.error) {
+      return res.status(400).json({ error: pageResult.error });
+    }
+
+    if (pageSizeResult?.error) {
+      return res.status(400).json({ error: pageSizeResult.error });
+    }
+
+    const shouldPaginate = rawPage !== undefined || rawPageSize !== undefined;
 
     const minPriceCentsResult = parsePriceQueryParam(
       rawMinPriceCents,
@@ -473,6 +523,37 @@ const getListings = async (req, res) => {
       )`);
     }
 
+    const totalResult = shouldPaginate
+      ? await pool.query(
+          `SELECT COUNT(*)::int AS total
+          FROM listings l
+          JOIN users u ON u.id = l.seller_id
+          WHERE ${whereClauses.join('\n        AND ')}`,
+          params,
+        )
+      : null;
+
+    const total = totalResult?.rows?.[0]?.total ?? 0;
+    const pageSize = pageSizeResult?.value || 16;
+    const totalPages = shouldPaginate
+      ? Math.max(1, Math.ceil(total / pageSize))
+      : 1;
+    const page = shouldPaginate
+      ? Math.min(pageResult?.value || 1, totalPages)
+      : 1;
+    const offset = (page - 1) * pageSize;
+
+    const searchDefaultLimit =
+      searchQuery && !shouldPaginate && !limitResult?.value ? 7 : null;
+
+    const paginationSql = shouldPaginate
+      ? `LIMIT ${pageSize} OFFSET ${offset}`
+      : limitResult?.value
+        ? `LIMIT ${limitResult.value}`
+        : searchDefaultLimit
+          ? `LIMIT ${searchDefaultLimit}`
+          : '';
+
     const result = await pool.query(
       `SELECT
         l.id,
@@ -499,11 +580,11 @@ const getListings = async (req, res) => {
           WHERE li.listing_id = l.id
           ORDER BY li.position ASC
           LIMIT 1
-        ) AS cover_image
-        , COALESCE(
-            ARRAY_REMOVE(ARRAY_AGG(DISTINCT ls.name), NULL),
-            '{}'
-          ) AS stacks
+        ) AS cover_image,
+        COALESCE(
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT ls.name), NULL),
+          '{}'
+        ) AS stacks
       FROM listings l
       JOIN users u ON u.id = l.seller_id
       LEFT JOIN listing_stacks ls ON ls.listing_id = l.id
@@ -528,9 +609,19 @@ const getListings = async (req, res) => {
           ? 'l.view_count DESC, l.created_at DESC'
           : 'l.created_at DESC'
       }
-      ${limitResult?.value ? `LIMIT ${limitResult.value}` : ''}`,
+      ${paginationSql}`,
       params,
     );
+
+    if (shouldPaginate) {
+      return res.json({
+        listings: result.rows,
+        total,
+        page,
+        pageSize,
+        totalPages,
+      });
+    }
 
     return res.json({ listings: result.rows });
   } catch (err) {

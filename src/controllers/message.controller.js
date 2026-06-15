@@ -31,9 +31,195 @@ const isValidHttpUrl = (value) => {
 
 const allowedAttachmentKinds = ['image', 'pdf'];
 
+const DEFAULT_THREAD_LIMIT = 30;
+const MAX_THREAD_LIMIT = 50;
+const DEFAULT_MESSAGE_LIMIT = 30;
+const MAX_MESSAGE_LIMIT = 50;
+
+const parsePositiveIntegerQueryParam = ({
+  value,
+  label,
+  defaultValue,
+  max,
+}) => {
+  if (value === undefined) {
+    return { value: defaultValue };
+  }
+
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    return { error: `${label} must be a positive integer.` };
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
+    return { error: `${label} must be between 1 and ${max}.` };
+  }
+
+  return { value: parsed };
+};
+
+const encodeCursor = ({ createdAt, id }) => {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: new Date(createdAt).toISOString(),
+      id: String(id),
+    }),
+    'utf8',
+  ).toString('base64url');
+};
+
+const decodeCursorQueryParam = (value) => {
+  if (value === undefined) {
+    return { value: null };
+  }
+
+  if (typeof value !== 'string' || !value.trim()) {
+    return { error: 'Invalid cursor.' };
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+
+    const createdAt = String(parsed?.createdAt || '').trim();
+    const id = String(parsed?.id || '').trim();
+
+    if (!createdAt || Number.isNaN(Date.parse(createdAt)) || !isUuid(id)) {
+      return { error: 'Invalid cursor.' };
+    }
+
+    return {
+      value: {
+        createdAt,
+        id,
+      },
+    };
+  } catch {
+    return { error: 'Invalid cursor.' };
+  }
+};
+
 const getThreads = async (req, res) => {
   try {
     const userId = req.user.id;
+
+    const rawLimit = req.query.limit;
+    const rawCursor = req.query.cursor;
+    const rawTab = req.query.tab;
+    const rawSearch = req.query.q;
+
+    const limitResult = parsePositiveIntegerQueryParam({
+      value: rawLimit,
+      label: 'Limit',
+      defaultValue: DEFAULT_THREAD_LIMIT,
+      max: MAX_THREAD_LIMIT,
+    });
+
+    if (limitResult.error) {
+      return res.status(400).json({ error: limitResult.error });
+    }
+
+    const cursorResult = decodeCursorQueryParam(rawCursor);
+
+    if (cursorResult.error) {
+      return res.status(400).json({ error: cursorResult.error });
+    }
+
+    const tab =
+      typeof rawTab === 'string' &&
+      ['all', 'unread', 'archived'].includes(rawTab)
+        ? rawTab
+        : 'all';
+
+    if (rawSearch !== undefined) {
+      if (typeof rawSearch !== 'string') {
+        return res
+          .status(400)
+          .json({ error: 'Search query must be a string.' });
+      }
+
+      if (rawSearch.trim().length > 80) {
+        return res
+          .status(400)
+          .json({ error: 'Search query must be 80 characters or less.' });
+      }
+    }
+
+    const limit = limitResult.value;
+    const cursor = cursorResult.value;
+    const searchQuery = typeof rawSearch === 'string' ? rawSearch.trim() : '';
+
+    const params = [userId];
+    const whereClauses = [`(t.buyer_id = $1 OR t.seller_id = $1)`];
+
+    if (tab === 'archived') {
+      whereClauses.push(`(
+        (t.buyer_id = $1 AND t.buyer_archived_at IS NOT NULL)
+        OR
+        (t.seller_id = $1 AND t.seller_archived_at IS NOT NULL)
+      )`);
+    } else if (tab === 'unread') {
+      whereClauses.push(`(
+        (
+          t.buyer_id = $1
+          AND t.buyer_archived_at IS NULL
+          AND lm.id IS NOT NULL
+          AND lm.sender_id <> $1
+          AND (
+            t.buyer_last_read_at IS NULL
+            OR lm.created_at > t.buyer_last_read_at
+          )
+        )
+        OR
+        (
+          t.seller_id = $1
+          AND t.seller_archived_at IS NULL
+          AND lm.id IS NOT NULL
+          AND lm.sender_id <> $1
+          AND (
+            t.seller_last_read_at IS NULL
+            OR lm.created_at > t.seller_last_read_at
+          )
+        )
+      )`);
+    } else {
+      whereClauses.push(`(
+        (t.buyer_id = $1 AND t.buyer_archived_at IS NULL)
+        OR
+        (t.seller_id = $1 AND t.seller_archived_at IS NULL)
+      )`);
+    }
+
+    if (searchQuery) {
+      params.push(`%${searchQuery}%`);
+      whereClauses.push(`(
+        CASE
+          WHEN t.buyer_id = $1 THEN COALESCE(s.full_name, s.username, '')
+          ELSE COALESCE(b.full_name, b.username, '')
+        END ILIKE $${params.length}
+        OR
+        CASE
+          WHEN t.buyer_id = $1 THEN COALESCE(s.username, '')
+          ELSE COALESCE(b.username, '')
+        END ILIKE $${params.length}
+      )`);
+    }
+
+    if (cursor) {
+      params.push(cursor.createdAt);
+      const cursorCreatedAtParam = params.length;
+
+      params.push(cursor.id);
+      const cursorIdParam = params.length;
+
+      whereClauses.push(`(
+        COALESCE(t.last_message_at, t.created_at),
+        t.id
+      ) < (
+        $${cursorCreatedAtParam}::timestamptz,
+        $${cursorIdParam}::uuid
+      )`);
+    }
 
     const result = await pool.query(
       `SELECT
@@ -98,7 +284,8 @@ const getThreads = async (req, res) => {
           )
           ELSE false
         END AS unread,
-        t.created_at
+        t.created_at,
+        COALESCE(t.last_message_at, t.created_at) AS activity_at
       FROM message_threads t
       LEFT JOIN listings l ON l.id = t.origin_listing_id
       LEFT JOIN orders o ON o.id = t.origin_order_id
@@ -108,15 +295,30 @@ const getThreads = async (req, res) => {
         SELECT m.id, m.sender_id, m.body, m.attachment_kind, m.created_at
         FROM messages m
         WHERE m.thread_id = t.id
-        ORDER BY m.created_at DESC
+        ORDER BY m.created_at DESC, m.id DESC
         LIMIT 1
       ) lm ON true
-      WHERE t.buyer_id = $1 OR t.seller_id = $1
-      ORDER BY COALESCE(t.last_message_at, t.created_at) DESC`,
-      [userId],
+      WHERE ${whereClauses.join('\n        AND ')}
+      ORDER BY COALESCE(t.last_message_at, t.created_at) DESC, t.id DESC
+      LIMIT ${limit + 1}`,
+      params,
     );
 
-    return res.json({ threads: result.rows });
+    const rows = result.rows.slice(0, limit);
+    const hasMore = result.rows.length > limit;
+    const lastRow = rows[rows.length - 1];
+
+    return res.json({
+      threads: rows,
+      hasMore,
+      nextCursor:
+        hasMore && lastRow
+          ? encodeCursor({
+              createdAt: lastRow.activity_at,
+              id: lastRow.id,
+            })
+          : null,
+    });
   } catch (err) {
     console.error('Get message threads error:', err);
     return res.status(500).json({ error: 'Failed to get message threads' });
@@ -375,8 +577,28 @@ const getThreadMessages = async (req, res) => {
     const userId = req.user.id;
     const { threadId } = req.params;
 
+    const rawLimit = req.query.limit;
+    const rawCursor = req.query.cursor;
+
     if (!isUuid(threadId)) {
       return res.status(400).json({ error: 'Invalid thread id' });
+    }
+
+    const limitResult = parsePositiveIntegerQueryParam({
+      value: rawLimit,
+      label: 'Limit',
+      defaultValue: DEFAULT_MESSAGE_LIMIT,
+      max: MAX_MESSAGE_LIMIT,
+    });
+
+    if (limitResult.error) {
+      return res.status(400).json({ error: limitResult.error });
+    }
+
+    const cursorResult = decodeCursorQueryParam(rawCursor);
+
+    if (cursorResult.error) {
+      return res.status(400).json({ error: cursorResult.error });
     }
 
     const { thread, role } = await fetchThreadForUser(threadId, userId);
@@ -387,6 +609,28 @@ const getThreadMessages = async (req, res) => {
 
     if (!role) {
       return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    const limit = limitResult.value;
+    const cursor = cursorResult.value;
+
+    const params = [threadId];
+    const whereClauses = [`m.thread_id = $1::uuid`];
+
+    if (cursor) {
+      params.push(cursor.createdAt);
+      const cursorCreatedAtParam = params.length;
+
+      params.push(cursor.id);
+      const cursorIdParam = params.length;
+
+      whereClauses.push(`(
+        m.created_at,
+        m.id
+      ) < (
+        $${cursorCreatedAtParam}::timestamptz,
+        $${cursorIdParam}::uuid
+      )`);
     }
 
     const result = await pool.query(
@@ -412,12 +656,28 @@ const getThreadMessages = async (req, res) => {
         END AS sender_username
       FROM messages m
       JOIN users u ON u.id = m.sender_id
-      WHERE m.thread_id = $1::uuid
-      ORDER BY m.created_at ASC`,
-      [threadId],
+      WHERE ${whereClauses.join('\n        AND ')}
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT ${limit + 1}`,
+      params,
     );
 
-    return res.json({ messages: result.rows });
+    const newestFirstRows = result.rows.slice(0, limit);
+    const rows = newestFirstRows.reverse();
+    const hasMore = result.rows.length > limit;
+    const oldestRow = rows[0];
+
+    return res.json({
+      messages: rows,
+      hasMore,
+      nextCursor:
+        hasMore && oldestRow
+          ? encodeCursor({
+              createdAt: oldestRow.created_at,
+              id: oldestRow.id,
+            })
+          : null,
+    });
   } catch (err) {
     console.error('Get thread messages error:', err);
     return res.status(500).json({ error: 'Failed to get messages' });
