@@ -257,6 +257,10 @@ const getThreads = async (req, res) => {
           WHEN b.status = 'deleted' OR b.deleted_at IS NOT NULL THEN NULL
           ELSE b.username
         END AS buyer_username,
+        CASE
+          WHEN b.status = 'deleted' OR b.deleted_at IS NOT NULL THEN NULL
+          ELSE b.avatar_url
+        END AS buyer_avatar_url,
         t.seller_id,
         CASE
           WHEN s.status = 'deleted' OR s.deleted_at IS NOT NULL THEN 'Deleted user'
@@ -266,6 +270,10 @@ const getThreads = async (req, res) => {
           WHEN s.status = 'deleted' OR s.deleted_at IS NOT NULL THEN NULL
           ELSE s.username
         END AS seller_username,
+        CASE
+          WHEN s.status = 'deleted' OR s.deleted_at IS NOT NULL THEN NULL
+          ELSE s.avatar_url
+        END AS seller_avatar_url,
         lm.body AS last_message_body,
         lm.attachment_kind AS last_message_attachment_kind,
         lm.created_at AS last_message_at,

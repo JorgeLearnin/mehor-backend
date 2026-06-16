@@ -4194,6 +4194,7 @@ async function createPaymentIntent(req, res) {
         l.title,
         l.listing_type,
         l.delivery_method,
+        l.support_window_days,
         l.base_price_cents,
         l.status,
         u.stripe_account_id,
@@ -4328,6 +4329,7 @@ async function createPaymentIntent(req, res) {
       title: listing.title,
       listing_type: listing.listing_type,
       delivery_method: listing.delivery_method,
+      support_window_days: listing.support_window_days,
       base_price_cents: listing.base_price_cents,
       stripe_account_id: listing.stripe_account_id,
     };
@@ -4540,6 +4542,7 @@ async function createOrderAfterPaymentSuccess({
             listing_title,
             listing_type,
             delivery_method,
+            support_window_days,
             base_price_cents,
             addons_total_cents,
             buyer_fee_cents,
@@ -4556,7 +4559,7 @@ async function createOrderAfterPaymentSuccess({
             stripe_payment_intent_id,
             stripe_charge_id
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
           )
           RETURNING *
           `,
@@ -4568,6 +4571,7 @@ async function createOrderAfterPaymentSuccess({
             listingSnapshot.title,
             listingSnapshot.listing_type,
             listingSnapshot.delivery_method,
+            listingSnapshot.support_window_days,
             pricing.base_price_cents,
             pricing.addons_total_cents,
             pricing.buyer_fee_cents,
